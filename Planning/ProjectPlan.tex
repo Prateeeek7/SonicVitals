@@ -1,0 +1,132 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\geometry{a4paper, margin=0.7in}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{fancyhdr}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\setlist[itemize]{itemsep=4pt, topsep=4pt, parsep=2pt, partopsep=0pt}
+
+% Balanced section spacing
+\titleformat{\section}{\large\bfseries}{\thesection}{1em}{}
+\titlespacing*{\section}{0pt}{2.5ex plus 0.5ex minus 0.2ex}{1.5ex plus 0.2ex}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=cyan,
+    pdftitle={SonicVitals: Project Work Plan},
+}
+
+\begin{document}
+
+\begin{center}
+    {\LARGE\bfseries SonicVitals: An Edge-AI Enabled Multimodal Physiological Sensing Platform using Contactless Vision, Acoustic Analysis, and Adaptive Signal Fusion} \\[1.5em]
+    
+    {\large PRATIK KUMAR (24BML0027) \quad UDAY KRISHAN KHANDELWAL (24BML0017) \quad JANVHEE DHOTE (24BML0102)} \\[1em]
+    
+    {\itshape School of Electronics Engineering (SENSE) \\ Vellore Institute of Technology (VIT), Vellore, Tamil Nadu, India}
+\end{center}
+
+\vspace{1.5em}
+
+\begin{abstract}
+\noindent Continuous physiological monitoring is highly desirable in modern clinical and residential environments, yet existing techniques are constrained by contact-based discomfort or susceptibility to environmental noise. Contactless photoplethysmography (rPPG) using video cameras is severely affected by illumination changes and motion artifacts, while acoustic respiratory sensing is vulnerable to ambient sound pollution. This proposal presents the development plan for \textit{SonicVitals}, an edge-assisted, cost-effective multimodal sensing platform designed to address these limitations. Leveraging the Freenove ESP32-S3 WROOM CAM, the platform synchronously acquires high-speed video frames (for facial capillary light absorption tracking) and digital audio signals (via an external INMP441 microphone for thoracic acoustic patterns) on a highly-integrated edge node. These streams are transmitted over Wi-Fi to a host computer where they undergo specialized digital signal processing (DSP) and are fused using a confidence-weighted attention neural network. This plan outlines a rigorous 3-month timeline covering hardware co-design, firmware integration, dual-path DSP development, and validation protocols, with a target budget optimized for the Indian electronics market ($\approx$ INR 1,400).
+\end{abstract}
+
+\vspace{1.5em}
+
+\section{Hardware Architecture and Signal Routing}
+To align with the project constraints, the hardware node is designed using standard, cheap, and locally available components in India. The total estimated bill of materials (BOM) is detailed in Table~\ref{tab:bom}.
+
+\begin{table}[!ht]
+\centering
+\caption{Bill of Materials (BOM) \& India Local Cost}
+\label{tab:bom}
+\begin{tabularx}{0.9\textwidth}{l X c r}
+\toprule
+\textbf{Component} & \textbf{Specifications} & \textbf{Qty} & \textbf{Cost (INR)} \\
+\midrule
+ESP32-S3 Board & Freenove ESP32-S3 WROOM CAM & 1 & 900 \\
+Microphone & INMP441 MEMS Digital I2S module & 1 & 150 \\
+Display & SSD1306 0.96" I2C OLED (128x64) & 1 & 130 \\
+Battery & 5V USB Power Bank & 1 & 150 \\
+Miscellaneous & Prototyping wires & 1 & 70 \\
+\midrule
+\textbf{Total Cost} & \textbf{Full Portable Acquisition Node} & & \textbf{1,400} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The Freenove ESP32-S3 WROOM CAM acts as the central hub. The OV2640 camera is connected internally, while an external INMP441 digital microphone transmits acoustic data over I2S to the exposed headers via TX/GPIO 43 (SCK), RX/GPIO 44 (WS), and BOOT/GPIO 0 (SD) due to severe GPIO limits on this carrier board. The OLED display operates on the dedicated I2C ports (SDA and SCL). A 5V USB power bank connects directly to the USB port, providing a reliable and portable power source.
+
+The pin-to-pin wiring for the peripheral modules is defined in Table~\ref{tab:wiring}.
+
+\begin{table}[!ht]
+\centering
+\caption{Pin-to-Pin System Wiring Map}
+\label{tab:wiring}
+\begin{tabular}{llll}
+\toprule
+\textbf{Peripheral} & \textbf{Pin Function} & \textbf{Freenove ESP32-S3 Pin} & \textbf{Notes} \\
+\midrule
+Internal Camera & DVP Parallel & Internal Pins & Standard DVP mapping \\
+INMP441 Mic & SCK (Bit Clock) & TX (GPIO 43) & External I2S clock \\
+INMP441 Mic & WS (Word Select) & RX (GPIO 44) & External I2S word select \\
+INMP441 Mic & SD (Serial Data) & BOOT (GPIO 0) & External I2S data input \\
+INMP441 Mic & L/R \& GND & GND & Configures left channel \\
+\midrule
+SSD1306 OLED & VDD & 3V3 / 5V & Display power \\
+SSD1306 OLED & GND & GND & Common ground \\
+SSD1306 OLED & SDA & SDA Port (GPIO 2) & Dedicated I2C Data \\
+SSD1306 OLED & SCK & SCL Port (GPIO 1) & Dedicated I2C Clock \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Three-Month Project Work Plan}
+The project timeline is structured across 12 weeks (3 months) to ensure a disciplined research and development cycle. 
+
+\subsection{Phase 1: Hardware Assembly \& FreeRTOS Firmware (Month 1)}
+The focus is on assembling the hardware prototype and developing the real-time acquisition firmware.
+\begin{itemize}
+    \item \textbf{Week 1 (Procurement \& Verification):} Sourcing components from local Indian online stores (Robu.in, QuartzComponents). Connect the Freenove ESP32-S3 WROOM CAM, the INMP441, and OLED display. Verify individual operation using basic test scripts (I2C display scan, camera capture test).
+    \item \textbf{Week 2 (Microphone \& I2S Configuration):} Setup the ESP32-S3 I2S DMA registers to read raw digital audio from the external INMP441 via TX, RX, and BOOT pins. Tune sampling parameters to 16\,kHz, 32-bit mono (optimal for respiratory sounds).
+    \item \textbf{Week 3 (Multitasking \& Buffer Scheduling):} Write the FreeRTOS multitasking structure. Task 1 (Core 0) will capture camera frames and store them in the external OPI PSRAM. Task 2 (Core 0) will read audio packets into a fast internal SRAM ring buffer. Task 3 (Core 1) will handle Wi-Fi streaming.
+    \item \textbf{Week 4 (Synchronized UDP Streaming):} Develop a lightweight packaging protocol. Generate high-precision timestamps for every camera frame and audio packet. Stream the synchronized streams over UDP to a host computer.
+\end{itemize}
+
+\subsection{Phase 2: Signal Processing \& Desktop Architecture (Month 2)}
+This phase is dedicated to building the host server application and developing the digital signal processing algorithms.
+\begin{itemize}
+    \item \textbf{Week 5 (Host Socket Server \& GUI):} Create a Python-based server application. Set up asynchronous sockets to receive UDP video and audio streams. Implement real-time packet buffering and jitter compensation. Create a basic GUI using PySide/PyQt.
+    \item \textbf{Week 6 (Visual Processing Pipeline - rPPG):} Integrate MediaPipe Face Mesh for landmark tracking. Extract dynamic regions of interest (Forehead and Cheeks). Average spatial pixel intensities in the Green channel (which exhibits the strongest pulse amplitude).
+    \item \textbf{Week 7 (Acoustic Processing Pipeline):} Implement STFT (Short-Time Fourier Transform) on raw audio to extract spectrograms. Apply spectral subtraction and bandpass filtering (100\,Hz – 2000\,Hz) to remove high-frequency environmental noise and power line hum.
+    \item \textbf{Week 8 (Physiological Feature Extraction):} Apply POS (Plane-Orthogonal-to-Skin) and CHROM algorithms to extract blood volume pulse (BVP) waveforms. Implement Wavelet denoising on the acoustic signals. Apply peak-detection to estimate heart rate and respiratory rate candidates independently.
+\end{itemize}
+
+\subsection{Phase 3: Machine Learning Fusion \& Academic Validation (Month 3)}
+The final phase focuses on implementing the AI fusion model, testing on subjects, and writing the research report.
+\begin{itemize}
+    \item \textbf{Week 9 (Modality Quality Estimation):} Implement Signal-to-Noise Ratio (SNR) estimators for both paths. For the camera, estimate confidence based on face motion vectors and ambient luminance. For the audio, estimate confidence based on ambient noise floors.
+    \item \textbf{Week 10 (Attention-Based Fusion Model):} Train a lightweight attention-based fusion network in PyTorch. The network will dynamically weight the feature vectors from the visual and acoustic pipelines based on the estimated quality confidence score.
+    \item \textbf{Week 11 (Experimental Trials \& Data Collection):} Conduct experimental trials with 15 volunteers under varying test conditions: static/ideal conditions, low lighting, talking/moving, and loud ambient hums. Record ground-truth PPG and respiration using clinical reference sensors.
+    \item \textbf{Week 12 (Statistical Analysis \& Report Writing):} Conduct Bland-Altman and Pearson correlation analysis to quantify accuracy. Compare the fused output errors against single-modality estimations. Compile the figures, draft the LaTeX paper, and finalize the presentation.
+\end{itemize}
+
+\subsection{Responsibility Matrix and Tasks}
+To ensure efficient pair programming and division of labor, specific responsibilities are assigned based on student expertise:
+\begin{itemize}
+    \item \textbf{Pratik Kumar (24BML0027) -- Embedded Systems Lead:} Responsible for hardware assembly, power management, battery wiring, FreeRTOS buffer scheduling, I2S and DVP register configurations, timestamp synchronization, and UDP transmission.
+    \item \textbf{Uday Krishan Khandelwal (24BML0017) -- DSP Lead:} Responsible for Python socket server implementation, MediaPipe facial tracking, POS/CHROM rPPG signal recovery, spectral noise cancellation of audio streams, and real-time visualization dashboards.
+    \item \textbf{Janvhee Dhote (24BML0102) -- Machine Learning \& Validation Lead:} Responsible for signal quality estimator development, building and training the attention fusion network, managing volunteer data acquisition, ground-truth alignment, and statistical analysis (MAE, RMSE, Bland-Altman plots).
+\end{itemize}
+
+\end{document}

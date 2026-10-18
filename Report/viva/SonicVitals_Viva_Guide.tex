@@ -1,0 +1,227 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=1.5cm]{geometry}
+\usepackage{graphicx,amsmath,xcolor,enumitem,booktabs}
+\usepackage[most]{tcolorbox}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\usepackage{titlesec,multicol}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{acc}{RGB}{15,106,74}
+\definecolor{warn}{RGB}{185,60,40}
+\titleformat{\section}{\large\bfseries\color{acc}}{\thesection}{0.6em}{}
+\titlespacing*{\section}{0pt}{8pt}{4pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{3pt}
+
+% Numbered item: \lab{n}{Title}{text}
+\newcommand{\num}[1]{\tikz[baseline=(c.base)]\node[circle,fill=red!75!black,text=white,inner sep=1.2pt,minimum size=13pt,font=\footnotesize\bfseries](c){#1};}
+\usepackage{tikz}
+\newenvironment{labels}{\begin{description}[leftmargin=0pt,labelsep=0.4em,itemsep=3pt,parsep=1pt,font=\normalfont]}{\end{description}}
+\newcommand{\lab}[2]{\item[\num{#1}\ \textbf{#2}]}
+\newcommand{\what}{\textit{What:}\ }
+\newcommand{\how}{\textit{How:}\ }
+\newcommand{\theory}{\textit{Theory:}\ }
+\newtcolorbox{vnote}{colback=warn!6,colframe=warn!70,boxrule=0.5pt,left=4pt,right=4pt,top=2pt,bottom=2pt,fontupper=\small,
+  title={\small\bfseries Viva note},coltitle=white,colbacktitle=warn!80,toptitle=1pt,bottomtitle=1pt}
+\newtcolorbox{keybox}{colback=acc!5,colframe=acc!70,boxrule=0.5pt,left=4pt,right=4pt,top=2pt,bottom=2pt,fontupper=\small}
+
+\begin{document}
+
+{\LARGE\bfseries\color{acc} SonicVitals: Viva Guide to the Dashboards}\\[2pt]
+{\small Every numbered label on the three screenshots, with what it shows, how it is computed and the theory behind it.}
+
+\section*{The project in one paragraph}
+SonicVitals is a contactless vital-signs system. An \textbf{ESP32-S3} board carries a camera (GC2145, 240$\times$160 pixels), an
+\textbf{INMP441} I$^2$S MEMS microphone and a 0.96'' \textbf{SSD1306 OLED}. The board streams JPEG frames and audio to a laptop
+(over Wi-Fi, TCP port 3333). The laptop runs a Python/Flask server that detects the face, extracts skin colour over time
+(\textbf{remote photoplethysmography, rPPG}) to estimate heart rate (HR) and respiratory rate (RR), and analyses heart sounds
+(\textbf{phonocardiography, PCG}) from the microphone. Results go to the web dashboard and back to the OLED.
+
+\begin{keybox}
+\textbf{Core principle of rPPG.} With every heartbeat, more blood enters the skin capillaries. Haemoglobin absorbs light (strongly in
+green, less in red), so the skin's reflected colour changes by about 0.1--1\,\% at the heart rate. The eye cannot see it, but the
+\emph{average} over thousands of skin pixels makes it measurable. \textbf{Pipeline:} face detection $\rightarrow$ skin ROI mean
+(R,\,G,\,B) per frame $\rightarrow$ CHROM colour projection $\rightarrow$ band-pass 0.75--2.5\,Hz $\rightarrow$ Welch spectrum
+$\rightarrow$ highest peak $f_0$ $\rightarrow$ HR $=60 f_0$.
+\end{keybox}
+
+\begin{vnote}
+These three screenshots come from the \textbf{first build} (5 Oct). A few cards in that build showed values produced by fixed
+formulas or labels, not measurements; they are marked below with ``\emph{Viva note}''. Say this openly if asked. It shows you
+understand your own system, and the current build has already fixed them.
+\end{vnote}
+
+% =====================================================================
+\section{Dashboard (live monitoring)}
+\begin{center}\includegraphics[width=\linewidth]{fig/dash.png}\end{center}
+
+\begin{labels}
+\lab{1}{Connection badge.} \what shows whether the host is receiving data from the node. \how the server polls the link; the
+badge turns green when frames arrive.
+\begin{vnote}``IP 192.168.1.100'' was fixed text in the first build's HTML. The current badge shows the real link
+(e.g.\ \texttt{tcp://sonicvitals.local:3333}).\end{vnote}
+
+\lab{2}{Primary vision stream.} \what the live camera picture after processing, served by Flask as an MJPEG stream
+(\texttt{/video\_feed}). ``FULL FACE LOCKED'' means the frame passed the five-test face gate (item 3). ``HQVGA'' is the
+240$\times$160 resolution. \theory rPPG needs a still, well-lit, fully visible face; anything else adds noise far bigger than the
+pulse.
+\begin{vnote}``15.0 FPS'' was a fixed label. The real frame rate over Wi-Fi is about 8 frames/s (measured; the dashboard now
+shows the measured value).\end{vnote}
+
+\lab{3}{Face box (green) and forehead ROI (yellow).} \what where the face was found and which skin patch gives the pulse.
+\how \textbf{Viola--Jones Haar cascade} (OpenCV): the image is converted to grey and histogram-equalised, then scanned with
+rectangular Haar features evaluated quickly through an \emph{integral image}. AdaBoost-selected features are arranged in a
+\emph{cascade}, so non-face windows are rejected early. The box is smoothed over frames to stop jitter. \textbf{Five-test gate}:
+(1)~face not touching the edges, (2)~face size 20--88\,\% of the frame width, (3)~aspect ratio 0.65--1.30 (not turned),
+(4)~all ROIs inside the image, (5)~enough light (cheek brightness $>15$) and similar left/right brightness. Only frames that pass
+enter the analysis. \textit{Current build:} forehead \emph{plus both cheeks} (more skin pixels means less noise).
+
+\lab{4}{``Systolic peak ready'' and $\sigma^2 = 834.1$.} \what $\sigma^2$ is the \textbf{sharpness} of the best frame in the last
+8\,s: the variance of the Laplacian (2nd-derivative filter) of the grey image. A blurred or moving image has weak edges, so a low
+variance; higher means sharper. The sharpest frame is kept for the colour analysis (Diagnostics Studio).
+\begin{vnote}``Systolic peak'' was set when the latest green value was above its 10-frame mean. That is not a reliable systole
+detector (in systole green \emph{drops}), so it was removed from the current build.\end{vnote}
+
+\lab{5}{Capture Diagnostic Moment.} \what sends the sharpest gated frame to \texttt{/api/capture\_diagnostic}, which computes
+the colour indices shown in the Diagnostics Studio.
+
+\lab{6}{Heart rate (97.3 BPM).} \how ROI means $R,G,B$ are buffered with timestamps and resampled to a uniform 15\,Hz grid.
+\textbf{CHROM} (de Haan \& Jeanne, 2013): each channel is divided by its mean over a short window (removes light intensity),
+then
+\[ X = 3R_n - 2G_n,\quad Y = 1.5R_n + G_n - 1.5B_n,\quad S = X - \alpha Y,\ \ \alpha=\sigma_X/\sigma_Y . \]
+$X$ and $Y$ both contain the motion/specular component, so subtracting $\alpha Y$ cancels it and leaves the pulse $S$. $S$ goes
+through a 3rd-order \textbf{Butterworth band-pass} 0.75--2.5\,Hz (45--150\,BPM), run forwards and backwards (\texttt{filtfilt},
+zero phase). A \textbf{Welch} spectrum (Signal Analysis, item 7) gives the peak $f_0$; $\text{HR}=60 f_0$. The display is refreshed every
+2\,s and smoothed with an exponential moving average (EMA). Normal resting adult range: 60--100\,BPM.
+
+\lab{7}{Respiratory rate (14.0 br/min).} \theory breathing slowly modulates the skin signal (changes in venous return, chest/head
+movement and light angle): \emph{respiratory-induced intensity variation}. \how the green channel is band-passed
+0.15--0.40\,Hz (9--24 breaths/min) and the spectral peak $f_r$ gives $\text{RR}=60f_r$. Normal adult: 12--20 br/min.
+\textit{Current build:} RR is shown only if the peak holds $\geq 50\,\%$ of the low-frequency power (otherwise ``--'').
+
+\lab{8}{HR variability (45.0 ms).} \theory HRV is the beat-to-beat variation of the interval between heartbeats (IBI). Standard
+time-domain measure: $\text{RMSSD}=\sqrt{\tfrac{1}{N-1}\sum (IBI_{i+1}-IBI_i)^2}$; typical resting values 20--60\,ms.
+\begin{vnote}In the first build this card was \emph{not measured}: it was $55+0.4(\text{SQI}-75)$, and with SQI $=50$ that gives
+exactly 45.0. The current build computes real RMSSD from heart-sound beat times (needs $\geq 20$ clean intervals), else ``--''.\end{vnote}
+
+\lab{9}{Signal quality (50.0 \%).} \what how dominant the cardiac peak is. First build: $\min(99,\max(50,\,160\,P_\text{peak}/P_\text{band}))$.
+\textbf{50.0 is the floor}, meaning the peak held $\leq 31\,\%$ of band power: a \emph{weak} signal at that moment.
+\textit{Current build:} spectral concentration $Q$ (power within $\pm0.1$\,Hz of $f_0$ divided by band power), with no clamp.
+
+\lab{10}{Stress index (50.0, labelled LF/HF).} \theory the real LF/HF index is the ratio of HRV spectral power at
+0.04--0.15\,Hz (sympathetic + parasympathetic) to 0.15--0.4\,Hz (parasympathetic); it needs minutes of accurate beat times.
+\begin{vnote}It was not LF/HF: it was $50-0.5(\text{HRV}-45)$, which is 50.0 when HRV is 45.0. Removed in the current build.\end{vnote}
+
+\lab{11}{Fusion confidence (75.0 \%).} \theory \emph{sensor fusion} combines the camera HR and the microphone HR, weighted by
+their quality. \textit{Current build:} $\text{HR}=(w_o\,\text{HR}_o + w_a\,\text{HR}_a)/(w_o+w_a)$ if the two agree within
+8\,BPM; otherwise the higher-quality channel is used and a conflict is flagged.
+\begin{vnote}First build: $\max(75,\,1.05\cdot\text{SQI})$, so 75.0 is the floor value, not a measured confidence.\end{vnote}
+
+\lab{12}{Acoustic input (MIC $-45$ dB).} \what live microphone waveform. $-45$\,dB $=20\log_{10}(\text{peak
+amplitude})$, i.e.\ dB relative to full scale (dBFS); quiet input. Tall spikes are clicks or speech.
+\theory heart sounds S1 (valves closing at the start of systole) and S2 (end of systole) lie at 20--150\,Hz. \textit{Current build:}
+the ESP32's INMP441 is used. Audio is band-passed 25--400\,Hz and resampled to 1\,kHz. The \textbf{Shannon energy envelope}
+$-x^2\log x^2$ boosts medium-intensity sounds and suppresses noise. The envelope's \textbf{autocorrelation} peaks at one beat
+period $\tau$, so $\text{HR}=60/\tau$.
+\begin{vnote}In the first build this was the \emph{laptop/browser} microphone (Web Audio API), and the ``V'' axis was not
+calibrated volts. Air-coupled MEMS mics also cut off below about 60\,Hz, so heart sounds are weak unless the mic is pressed on the
+chest.\end{vnote}
+
+\lab{13}{Recovered blood volume pulse (BVP).} \what the band-passed CHROM signal, standardised (z-score: mean 0, SD 1). Each hump
+is one heartbeat (systolic upstroke, then a slower decline). Counting peaks per minute gives HR.
+\begin{vnote}Axis units ``mV'' are cosmetic (the signal is dimensionless). The x-axis advanced 0.12 per dashboard update rather
+than in real seconds, which is why the humps look slower than 97\,BPM. The current build plots against real time.\end{vnote}
+
+\lab{14}{Recovered respiration waveform.} \what the 0.15--0.40\,Hz component of the green channel (item 7). One slow cycle
+$\approx$ one breath (about 4\,s at 14 br/min). The sharp jump near 64 is a \textbf{motion artefact} (head movement), which is why
+quality gating matters. ``Displacement (mm)'' is a cosmetic label; the signal is a normalised intensity.
+\end{labels}
+
+% =====================================================================
+\section{Diagnostics Studio (colour analysis of one frame)}
+\begin{center}\includegraphics[width=\linewidth]{fig/diag.png}\end{center}
+
+\begin{keybox}
+\textbf{Idea.} Skin colour depends on chromophores: \emph{haemoglobin} (red, perfusion), \emph{deoxy-haemoglobin} (bluish),
+\emph{bilirubin} (yellow), \emph{melanin} (brown). Ratios of mean R, G, B in chosen face regions give simple
+\textbf{colorimetric indices}. They are \textbf{exploratory screening indicators, not diagnoses}: they depend strongly on lighting,
+camera white balance and skin tone, and were not validated against blood tests.
+\end{keybox}
+
+\begin{labels}
+\lab{1}{Status and controls.} Shows that the face gate passed. \emph{Auto-capture} grabs a frame automatically when the gate
+passes. \emph{Export JSON} saves all values.
+\lab{2}{Processing steps 01--05.} (01)~sharpest gated frame $\rightarrow$ (02)~five ROIs placed relative to the face box
+$\rightarrow$ (03)~mean R, G, B per ROI $\rightarrow$ (04)~index formulas $\rightarrow$ (05)~compare with software reference
+ranges (NORMAL / WARN / ALERT).
+\lab{3}{View tabs.} Switch between the ROI view and false-colour heat maps (OpenCV colour maps) of each index over the face:
+erythema (R vs.\ G), yellowness (CIELAB $b^*$), cyanosis (B/R).
+\lab{4}{Frame info strip.} Frame number of the captured frame, ``5 zones'' verified, and \emph{Motion / Quality} labels.
+\emph{Viva note:} both labels came from the sharpness value only ($>100 \Rightarrow$ LOW / HIGH); motion itself was not measured.
+\lab{5}{Five anatomical ROIs.} Boxes at fixed fractions of the face box: \textbf{Forehead} (perfusion), \textbf{Sclera} band across
+the eyes (yellowness), \textbf{Left/Right cheek} (pallor and symmetry), \textbf{Lips} (cyanosis).
+\lab{6}{Triage cards (2 active flags).} The four headline indices repeated as cards; ``2 active flags'' counts rows not NORMAL
+(Pallor WARN, Icterus ALERT).
+\lab{7}{Interpretation text.} Auto-generated sentence listing the flagged indices. \emph{Viva note:} the clinical wording (anemia,
+jaundice risk, lab panels) has been toned down in the current build to ``in/out of software range''.
+\lab{8}{Erythema Index, EI $=9.78$.} $\text{EI}=100\,(\log_{10}\bar R-\log_{10}\bar G)$ on the forehead (Dawson/Diffey style). More
+blood means more green absorbed, so $R/G$ and EI rise. Here $R/G=10^{0.0978}\approx1.25$. 9.78 is NORMAL because the code's actual range was
+8--23; the ``10.0--23.0'' printed in the table was a label mismatch (fixed in the current build).
+\lab{9}{Pallor index $=0.749$.} $\text{PI}=(\bar G+\bar B)/(2\bar R)$ on both cheeks. Less haemoglobin (anaemia) means less
+red, so PI rises. $0.749 > 0.72$ gives WARN.
+\lab{10}{Jaundice / yellowness index $=20.09$.} $\text{YI}=100\,(\bar R+\bar G-2\bar B)/(\bar R+\bar G+\bar B)$ on the eye band.
+Bilirubin absorbs blue, so yellow tissue has low $B$ and high YI. \emph{Viva note:} the band includes skin and eyebrows, and warm
+room light lowers $B$, so ALERT here is most likely \textbf{lighting/skin tone}, not jaundice. This is the main limitation of
+RGB colorimetry without a colour reference card.
+\lab{11}{Cyanosis ratio $=0.551$.} $\text{CR}=\bar B/\bar R$ on the lips. Deoxygenated blood looks bluer, so CR rises; below 0.76
+is in range.
+\lab{12}{Hemifacial symmetry $=3.4\,\%$.} $100\,|\bar G_L-\bar G_R|/(\bar G_L+\bar G_R)$, the left/right cheek difference in green
+(perfusion). Large asymmetry can also come from side lighting, so it is an observation only.
+\lab{13}{Frame clarity $=1260.8$.} Variance of the Laplacian (see Dashboard item 4); $>100$ is accepted as sharp.
+\lab{14}{ROI analysis list.} Text description of each region and why it was chosen (e.g.\ forehead: thin skin, dense capillaries,
+little hair or motion).
+\end{labels}
+
+% =====================================================================
+\section{Signal Analysis (inside the HR estimate)}
+\begin{center}\includegraphics[width=\linewidth]{fig/sig.png}\end{center}
+
+\begin{labels}
+\lab{1}{Cardiac peak $f_0 = 0.94$ Hz (56.8 BPM).} Frequency of the highest point of the spectrum (item 7) inside 0.75--2.5\,Hz;
+$\text{HR}=60\times f_0$. This screenshot is from a different moment than the Dashboard (97.3\,BPM), so the values differ.
+\lab{2}{Cardiac band SNR $=+2.7$ dB.} First build: $10\log_{10}(P_\text{peak}/\text{median in-band power})$; $+2.7$\,dB means the
+peak is only $1.9\times$ the typical level, i.e.\ \textbf{weak}. \textit{Current build} uses the standard de~Haan SNR: power within
+$\pm0.1$\,Hz of $f_0$ and $\pm0.2$\,Hz of $2f_0$ (harmonic) divided by the remaining 0.5--4\,Hz power. HR is accepted only if
+SNR $\geq 0$\,dB; pure noise passes this less than 5\,\% of the time.
+\lab{3}{Spectral purity (SQI) $=50.0\,\%$.} Same quantity as Dashboard item 9; 50.0 is the clamped floor.
+\lab{4}{Respiration $f_r = 0.23$ Hz (14.1 br/min).} Peak of the 0.15--0.40\,Hz respiratory spectrum; $60\times0.235=14.1$.
+\lab{5}{``Wavelet ratio'' $D_2/A_3 = 46.97$.} Energy ratio $\sum D_2^2/\sum A_3^2$. \emph{Viva note:} it is \textbf{not} a true
+wavelet transform. $A_3$ is a moving average of the BVP (about 1\,s window), $D_2$ is BVP $-\,A_3$ and $D_1$ is the first
+difference. A 1\,s average almost cancels a 1\,Hz pulse, so $A_3$ is tiny and the ratio is large. The current build names this
+honestly: trend / pulsatile / difference.
+\lab{6}{Video source.} Which camera feeds the engine (ESP32-S3 over its parallel DVP camera bus). ``15 FPS'' was a fixed label.
+\lab{7}{rPPG power spectral density.} \what how the pulse signal's power is spread over frequency (0.5--3.5\,Hz shown, in dB
+relative to the maximum). \how \textbf{Welch's method}: split the signal into 50\,\%-overlapping segments, apply a Hann window,
+take each FFT magnitude squared, and average. Averaging lowers the variance of the estimate. \textbf{Reading this plot:} the curve
+is almost \emph{flat} from 0.9 to 2.3\,Hz, with several bumps within 1--2\,dB (0.94, 1.55, 1.9, 2.25\,Hz). So the 0.94\,Hz
+``winner'' is barely ahead: a noisy recording. The straight segments come from coarse resolution: 128-sample segments at
+15\,Hz give bins $15/128=0.117$\,Hz $=7$\,BPM apart. \textit{Current build:} 4096-point zero-padding plus parabolic interpolation
+(sub-bin peak), peak tracking near the previous HR, and the SNR gate. The fall above 2.5\,Hz is the band-pass filter edge.
+\lab{8}{Acoustic STFT spectrogram.} \what time (x, s) versus frequency (y, kHz), colour $=$ level in dB (white $=-70$\,dB floor,
+dark green $=$ loud). \how \textbf{short-time Fourier transform}: FFT of short successive audio blocks (Web Audio analyser, FFT
+512), one column per update. The tooltip $(8.2\text{ s},\,2.27\text{ kHz},\,-70\text{ dB})$ is a silent cell. \textbf{Reading:}
+energy sits mostly below 1.5\,kHz (voice/room noise); vertical stripes (e.g.\ at 0 and 8\,s) are broadband clicks or speech.
+Heart sounds (20--150\,Hz) would occupy only the bottom one or two rows (each row is about 90\,Hz wide), so the PCG is analysed
+separately with a 25--400\,Hz filter and envelope autocorrelation (Dashboard item 12).
+\lab{9}{Mean-centred normalisation.} The BVP in z-score units: $z=(x-\mu)/\sigma$. Removing the mean (DC) and scaling to unit SD
+makes signals from different people, lighting and cameras comparable and is required before CHROM/FFT. Peaks $\approx$ beats;
+the shrinking amplitude after 63 shows the signal fading (movement or light change).
+\lab{10}{Multi-resolution decomposition.} Plots $A_3$ (slow trend, green), $D_2$ (pulsatile residual) and $D_1$ (first
+difference) from item 5. $D_2$ carries the heartbeat oscillation; $A_3$ near zero shows little slow drift. Same viva note as
+item 5: moving-average split, not a DWT.
+\end{labels}
+
+\input{viva_qa}
+
+\end{document}

@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SonicVitals - Physiological Sensing Platform</title>
+    <!-- Importing high-quality professional typography -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <!-- Plotly.js for high-precision scientific physiological waveforms -->
+    <script src="https://cdn.plot.ly/plotly-2.25.2.min.js"></script>
+    <!-- MediaPipe Face Mesh for live client-side computer vision tracking -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+    <!-- 1. Fixed Top Full-Width Navigation Bar -->
+    <header class="navbar">
+        <div class="nav-left">
+            <span class="logo">SonicVitals</span>
+            <span class="divider-v"></span>
+            <nav class="nav-links">
+                <button class="nav-btn active" data-tab="dashboard">Dashboard</button>
+                <button class="nav-btn" data-tab="diagnostics" id="nav-diag-btn">Diagnostics Studio</button>
+                <button class="nav-btn" data-tab="analysis">Signal Analysis</button>
+                <button class="nav-btn" data-tab="device">Device Management</button>
+                <button class="nav-btn" data-tab="experiments">Experiments</button>
+                <button class="nav-btn" data-tab="reports">Reports</button>
+                <button class="nav-btn" data-tab="settings">Settings</button>
+            </nav>
+        </div>
+        <div class="nav-right">
+            <div class="connection-status connected" id="connection-indicator">
+                <span class="dot"></span>
+                <span class="status-text" id="status-text">CONNECTED | IP: 192.168.1.100</span>
+            </div>
+            <div class="profile">SENSE Researcher | VIT</div>
+        </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="workspace">
+
+        <!-- TAB 1: DASHBOARD -->
+        <section id="tab-dashboard" class="tab-content active">
+            <!-- Upper Grid: Webcam Feed and Audio Waveform -->
+            <div class="instrument-row-top">
+                <!-- Primary Video Feed Panel -->
+                <div class="instrument-panel video-panel">
+                    <div class="panel-header">
+                        <h2>PRIMARY VISION STREAM (rPPG FACIAL CAPTURE)</h2>
+                        <div class="panel-meta">
+                            <span id="badge-full-face" class="badge-face searching">ALIGNING FACE...</span>
+                            <span>HQVGA | 15.0 FPS</span>
+                        </div>
+                    </div>
+                    <div class="video-container">
+                        <!-- Live USB MJPEG Stream -->
+                        <img id="usb-cam-feed" src="http://localhost:5001/video_feed" alt="Primary Clinical rPPG Stream" crossorigin="anonymous" />
+                        <canvas id="vision-canvas" style="position: absolute; top: 0; left: 0; z-index: 1; display: none;"></canvas>
+                        <div class="acquisition-alert alert-danger" id="vision-status" style="z-index: 101;">NO PATIENT DETECTED (SEARCHING...)</div>
+                    </div>
+                    <!-- Diagnostic Moment Action Bar -->
+                    <div class="video-action-bar">
+                        <div class="action-bar-primary">
+                            <div class="moment-status-container">
+                                <span class="badge-moment buffering" id="moment-badge">
+                                    <span class="moment-pulse"></span>
+                                    <span id="moment-status-txt">BUFFERING</span>
+                                </span>
+                                <span class="clarity-score" id="moment-clarity">σ²=--</span>
+                            </div>
+                            <button class="btn-capture-diag" id="btn-capture-diag" onclick="captureDiagnosticSnapshot()" type="button" title="Capture diagnostic snapshot moment">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                                <span>CAPTURE MOMENT</span>
+                            </button>
+                        </div>
+                        <div class="action-bar-guidance" id="moment-guidance-row" style="display: none;">
+                            <span class="guidance-icon">ℹ️</span>
+                            <span id="moment-guidance-txt">Align patient full face within camera frame</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Side: Vitals Grid and Audio Stream -->
+                <div class="instrument-panel metrics-panel">
+                    <div class="panel-header">
+                        <h2>PHYSIOLOGICAL READOUT PANELS</h2>
+                        <div class="panel-meta">CLINICAL REFRESH: 2.0s (STABILIZED)</div>
+                    </div>
+                    
+                    <!-- Vitals Status Boxes -->
+                    <div class="vitals-grid">
+                        <div class="vital-card border-green" id="card-hr">
+                            <span class="card-title">HEART RATE</span>
+                            <div class="card-val-row">
+                                <span class="card-value" id="val-hr">--</span>
+                                <span class="card-unit">BPM</span>
+                            </div>
+                            <span class="card-timestamp" id="ts-hr">TS: --:--:--</span>
+                        </div>
+                        <div class="vital-card border-green" id="card-rr">
+                            <span class="card-title">RESPIRATORY RATE</span>
+                            <div class="card-val-row">
+                                <span class="card-value" id="val-rr">--</span>
+                                <span class="card-unit">Br/Min</span>
+                            </div>
+                            <span class="card-timestamp" id="ts-rr">TS: --:--:--</span>
+                        </div>
+                        <div class="vital-card border-green" id="card-hrv">
+                            <span class="card-title">HR VARIABILITY</span>
+                            <div class="card-val-row">
+                                <span class="card-value" id="val-hrv">--</span>
+                                <span class="card-unit">ms</span>
+                            </div>
+                            <span class="card-timestamp" id="ts-hrv">TS: --:--:--</span>
+                        </div>
+                        <div class="vital-card border-green" id="card-quality">
+                            <span class="card-title">SIGNAL QUALITY</span>
+                            <div class="card-val-row">
+                                <span class="card-value" id="val-quality">--</span>
+                                <span class="card-unit">%</span>
+                            </div>
+                            <span class="card-timestamp" id="ts-quality">TS: --:--:--</span>
+                        </div>
+                        <div class="vital-card border-green" id="card-stress">
+                            <span class="card-title">STRESS INDEX</span>
+                            <div class="card-val-row">
+                                <span class="card-value" id="val-stress">--</span>
+                                <span class="card-unit">LF/HF</span>
+                            </div>
+                            <span class="card-timestamp" id="ts-stress">TS: --:--:--</span>
+                        </div>
+                        <div class="vital-card border-green" id="card-confidence">
+                            <span class="card-title">FUSION CONFIDENCE</span>
+                            <div class="card-val-row">
+                                <span class="card-value" id="val-confidence">--</span>
+                                <span class="card-unit">%</span>
+                            </div>
+                            <span class="card-timestamp" id="ts-confidence">TS: --:--:--</span>
+                        </div>
+                    </div>
+
+                    <!-- Live Audio Waveform -->
+                    <div class="waveform-box">
+                        <div class="waveform-header-bar">
+                            <span class="waveform-title-text">ACOUSTIC AUDIO INPUT (MICROPHONE)</span>
+                            <button class="mic-toggle-btn" id="mic-status-badge" onclick="toggleAcousticMicrophone()" type="button" title="Click to grant browser microphone access">
+                                <span class="mic-dot mic-dot-off" id="mic-status-dot"></span>
+                                <span id="mic-status-text">CLICK TO ENABLE MIC</span>
+                            </button>
+                        </div>
+                        <div id="audio-plot" style="width:100%; flex: 1; min-height: 140px;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Lower Row: Scrolling Waveform Charts -->
+            <div class="instrument-row-bottom">
+                <div class="instrument-panel half-width" style="height:220px;">
+                    <div id="rppg-plot" style="width:100%; height:100%;"></div>
+                </div>
+                <div class="instrument-panel half-width" style="height:220px;">
+                    <div id="resp-plot" style="width:100%; height:100%;"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 2: SIGNAL ANALYSIS -->
+        <section id="tab-analysis" class="tab-content">
+            <div class="panel-header page-header">
+                <div>
+                    <h1>SIGNAL ANALYSIS PIPELINE (LABORATORY GRAPH VIEW)</h1>
+                    <div style="font-size: 10px; color: var(--text-muted); font-family: monospace; margin-top: 2px;">
+                        REAL-TIME SPECTRAL & WAVELET DECOMPOSITION OF RECOVERED PULSE
+                    </div>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <button class="btn-action" id="btn-toggle-mic" onclick="toggleAcousticMicrophone()">MIC: CONNECT AUDIO</button>
+                    <button class="btn-action" onclick="exportCSV()">EXPORT RECORDING (CSV)</button>
+                </div>
+            </div>
+            
+            <!-- Real-Time Clinical Telemetry Strip -->
+            <div class="analysis-telemetry-bar">
+                <div class="analysis-metric">
+                    <span class="analysis-label">CARDIAC PEAK (f₀)</span>
+                    <span class="analysis-val" id="sig-peak-freq">-- Hz (-- BPM)</span>
+                </div>
+                <div class="analysis-metric">
+                    <span class="analysis-label">CARDIAC BAND SNR</span>
+                    <span class="analysis-val" id="sig-snr">-- dB</span>
+                </div>
+                <div class="analysis-metric">
+                    <span class="analysis-label">SPECTRAL PURITY (SQI)</span>
+                    <span class="analysis-val" id="sig-sqi">--%</span>
+                </div>
+                <div class="analysis-metric">
+                    <span class="analysis-label">RESPIRATION (fᵣ)</span>
+                    <span class="analysis-val" id="sig-resp-freq">-- Hz (-- BrPM)</span>
+                </div>
+                <div class="analysis-metric">
+                    <span class="analysis-label">WAVELET RATIO (D₂/A₃)</span>
+                    <span class="analysis-val" id="sig-wavelet-ratio">--</span>
+                </div>
+                <div class="analysis-metric">
+                    <span class="analysis-label">VIDEO SOURCE</span>
+                    <span class="analysis-val" id="sig-stream-src" style="color: var(--emerald-green);">CONNECTING...</span>
+                </div>
+            </div>
+
+            <div class="grid-analysis">
+                <div class="instrument-panel" style="height:320px;">
+                    <div id="fft-plot" style="width:100%; height:100%;"></div>
+                </div>
+                <div class="instrument-panel" style="height:320px;">
+                    <div id="spectrogram-plot" style="width:100%; height:100%;"></div>
+                </div>
+                <div class="instrument-panel" style="height:320px;">
+                    <div id="detrended-plot" style="width:100%; height:100%;"></div>
+                </div>
+                <div class="instrument-panel" style="height:320px;">
+                    <div id="wavelet-plot" style="width:100%; height:100%;"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 3: DEVICE MANAGEMENT -->
+        <section id="tab-device" class="tab-content">
+            <div class="panel-header page-header">
+                <h1>ESP32-S3 HARDWARE DIAGNOSTICS & TELEMETRY</h1>
+                <div class="connection-status connected" style="position:static;">
+                    <span class="dot"></span>
+                    <span>ONLINE</span>
+                </div>
+            </div>
+            
+            <table class="telemetry-table">
+                <thead>
+                    <tr>
+                        <th>Hardware Node Telemetry Parameter</th>
+                        <th>Registered Status / Value</th>
+                        <th>Target System Threshold</th>
+                        <th>Diagnostic State</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Camera Interface Connection (DVP Parallel)</td>
+                        <td id="tel-cam">OV2640 Detected (15 FPS)</td>
+                        <td>UXGA/VGA Stable</td>
+                        <td class="state-stable">STABLE</td>
+                    </tr>
+                    <tr>
+                        <td>Microphone Sampling Rate (I2S DMA)</td>
+                        <td id="tel-mic">16000 Hz (32-bit Mono)</td>
+                        <td>16000 Hz</td>
+                        <td class="state-stable">STABLE</td>
+                    </tr>
+                    <tr>
+                        <td>Wi-Fi RSSI (Signal Strength)</td>
+                        <td id="tel-rssi">-52 dBm</td>
+                        <td>&gt; -75 dBm</td>
+                        <td class="state-stable">STABLE</td>
+                    </tr>
+                    <tr>
+                        <td>Rechargeable Battery Voltage</td>
+                        <td id="tel-battery">3.88 V (TP4056 output)</td>
+                        <td>3.3 V - 4.2 V</td>
+                        <td class="state-stable">STABLE</td>
+                    </tr>
+                    <tr>
+                        <td>Packet Loss Rate (UDP Stream)</td>
+                        <td id="tel-loss">0.14% (12 packets lost)</td>
+                        <td>&lt; 2.0%</td>
+                        <td class="state-stable">STABLE</td>
+                    </tr>
+                    <tr>
+                        <td>Stream Latency</td>
+                        <td id="tel-latency">14.2 ms</td>
+                        <td>&lt; 50 ms</td>
+                        <td class="state-stable">STABLE</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <div class="console-box">
+                <div class="console-header">SYSTEM LOGGER CONSOLE</div>
+                <div class="console-body" id="console-logs">
+                    <div>[INFO] 00:00:01.000 - Booting ESP32-S3. Firmware version v1.2 initialized.</div>
+                    <div>[INFO] 00:00:01.200 - WiFi connected. SSID: VIT_SENSE_LAB. IP: 192.168.1.100.</div>
+                    <div>[INFO] 00:00:01.500 - Camera module OV2640 started. Formats configured.</div>
+                    <div>[INFO] 00:00:01.600 - I2S audio driver installed. DMA buffers listening.</div>
+                    <div>[INFO] 00:00:01.800 - SSD1306 OLED display configured at address 0x3C.</div>
+                    <div>[INFO] 00:00:02.000 - Socket connection established. Streaming UDP packets...</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 4: EXPERIMENTS -->
+        <section id="tab-experiments" class="tab-content">
+            <div class="panel-header page-header">
+                <div>
+                    <h1>ACQUISITION EXPERIMENTS AND MULTIMODAL VALIDATION</h1>
+                    <div style="font-size: 10px; color: var(--text-muted); font-family: monospace; margin-top: 2px;">
+                        REAL-TIME CLINICAL SENSOR AGREEMENT & SYNCHRONIZED DUAL-MODALITY RECORDING
+                    </div>
+                </div>
+                <div class="panel-meta" id="exp-live-pill" style="color: var(--emerald-green); font-weight: 700;">● STREAM ACTIVE</div>
+            </div>
+            
+            <div class="split-layout">
+                <!-- Left Panel: Parameters Form & Live Scorecards -->
+                <div class="instrument-panel side-form">
+                    <div class="panel-header">
+                        <h2>SESSION CONTROLLER</h2>
+                    </div>
+                    <form class="param-form" onsubmit="return false;">
+                        <div class="form-group">
+                            <label>Participant ID:</label>
+                            <input type="text" value="VIT_SENSE_SUB_01" id="sub-id">
+                        </div>
+                        <div class="form-group">
+                            <label>Camera Capture Mode:</label>
+                            <select id="config-resolution">
+                                <option>VGA (640x480) - 15 FPS</option>
+                                <option>QVGA (320x240) - 30 FPS</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Acquisition Duration:</label>
+                            <select id="config-duration">
+                                <option value="60">60 seconds (Standard)</option>
+                                <option value="120">120 seconds (Extended)</option>
+                                <option value="300">300 seconds (Stress Protocol)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Fusion Neural Weights:</label>
+                            <select id="config-model">
+                                <option>Quality-Aware Attention (Pre-trained)</option>
+                                <option>Fixed-Weight Average</option>
+                                <option>Single Modality (Camera Only)</option>
+                            </select>
+                        </div>
+                        <button class="btn-submit" id="btn-session" onclick="toggleSession()">START RECORDING SESSION</button>
+                        <div id="session-progress-container" style="display: none; margin-top: 10px; background: var(--bg-color); padding: 8px; border: 1px solid var(--border-color);">
+                            <div style="display: flex; justify-content: space-between; font-size: 9px; font-family: monospace; margin-bottom: 4px;">
+                                <span style="font-weight: 700; color: var(--text-color);">ACQUISITION PROGRESS</span>
+                                <span id="session-progress-pct" style="color: var(--emerald-green); font-weight: 700;">0%</span>
+                            </div>
+                            <div style="height: 6px; background: #e0e0da; border-radius: 2px; overflow: hidden;">
+                                <div id="session-progress-bar" style="width: 0%; height: 100%; background: var(--emerald-green); transition: width 0.2s;"></div>
+                            </div>
+                        </div>
+                    </form>
+
+                    <!-- Statistical Scorecards -->
+                    <div class="exp-stats-container">
+                        <div class="exp-stat-card">
+                            <div class="stat-num" id="stat-samples">0</div>
+                            <div class="stat-lbl">PAIRED SAMPLES (N)</div>
+                        </div>
+                        <div class="exp-stat-card">
+                            <div class="stat-num" id="stat-bias">--</div>
+                            <div class="stat-lbl">MEAN BIAS (d̄)</div>
+                        </div>
+                        <div class="exp-stat-card">
+                            <div class="stat-num" id="stat-mae">--</div>
+                            <div class="stat-lbl">MAE (BPM)</div>
+                        </div>
+                        <div class="exp-stat-card">
+                            <div class="stat-num" id="stat-rmse">--</div>
+                            <div class="stat-lbl">RMSE (BPM)</div>
+                        </div>
+                        <div class="exp-stat-card">
+                            <div class="stat-num" id="stat-corr">--</div>
+                            <div class="stat-lbl">PEARSON (r)</div>
+                        </div>
+                        <div class="exp-stat-card">
+                            <div class="stat-num" id="stat-sd">--</div>
+                            <div class="stat-lbl">SD OF DIFF</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Panel: Bland-Altman agreement plot & Synchronized Trend Tracking -->
+                <div class="exp-charts-column" style="flex: 2.2; display: flex; flex-direction: column; gap: 16px;">
+                    <!-- Bland-Altman Agreement Plot -->
+                    <div class="instrument-panel" style="height: 310px; display: flex; flex-direction: column;">
+                        <div class="panel-header">
+                            <h2>REAL-TIME MULTIMODAL SENSOR AGREEMENT (BLAND-ALTMAN)</h2>
+                            <div class="panel-meta" id="exp-agreement-stats">BIAS: -- | 95% LoA: [--, --] | N: 0</div>
+                        </div>
+                        <div id="bland-altman-canvas" style="width: 100%; flex: 1;"></div>
+                    </div>
+
+                    <!-- Real-Time Synchronized Trend Tracker -->
+                    <div class="instrument-panel" style="height: 250px; display: flex; flex-direction: column;">
+                        <div class="panel-header">
+                            <h2>REAL-TIME DUAL-MODALITY SYNCHRONIZATION TREND (BEAT-TO-BEAT)</h2>
+                            <div class="panel-meta">GREEN: OPTICAL rPPG | TERRACOTTA: ACOUSTIC FUSION</div>
+                        </div>
+                        <div id="trend-tracker-canvas" style="width: 100%; flex: 1;"></div>
+                        <div class="exp-live-readouts" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 6px; padding: 6px 12px; font-family: monospace; font-size: 10px;">
+                            <div><strong>STATUS:</strong> <span id="exp-status" style="color: var(--text-muted);">STANDBY</span></div>
+                            <div><strong>ELAPSED:</strong> <span id="exp-timer">00:00</span></div>
+                            <div><strong>SAMPLES:</strong> <span id="exp-samples">0</span></div>
+                            <div><strong>SESSION HR:</strong> <span id="exp-mean-hr">-- BPM</span></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 5: REPORTS -->
+        <section id="tab-reports" class="tab-content">
+            <div class="panel-header page-header">
+                <h1>SAVED EXPERIMENTAL REPORTS</h1>
+            </div>
+            
+            <table class="reports-table">
+                <thead>
+                    <tr>
+                        <th>Session ID</th>
+                        <th>Participant</th>
+                        <th>Acquisition Mode</th>
+                        <th>Mean HR (BPM)</th>
+                        <th>Mean RR (Breaths/M)</th>
+                        <th>Avg Confidence</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="reports-table-body">
+                    <tr>
+                        <td>SESS_178491</td>
+                        <td>VIT_SUB_01</td>
+                        <td>Attention-ML</td>
+                        <td>72.4</td>
+                        <td>15.8</td>
+                        <td>94.2%</td>
+                        <td><button class="btn-small" onclick="alert('Exporting PDF for SESS_178491...')">Export PDF</button></td>
+                    </tr>
+                    <tr>
+                        <td>SESS_178492</td>
+                        <td>VIT_SUB_02</td>
+                        <td>Attention-ML</td>
+                        <td>81.1</td>
+                        <td>18.2</td>
+                        <td>91.8%</td>
+                        <td><button class="btn-small" onclick="alert('Exporting PDF for SESS_178492...')">Export PDF</button></td>
+                    </tr>
+                    <tr>
+                        <td>SESS_178493</td>
+                        <td>VIT_SUB_03</td>
+                        <td>Attention-ML</td>
+                        <td>68.9</td>
+                        <td>12.4</td>
+                        <td>95.1%</td>
+                        <td><button class="btn-small" onclick="alert('Exporting PDF for SESS_178493...')">Export PDF</button></td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- TAB 6: SETTINGS -->
+        <section id="tab-settings" class="tab-content">
+            <div class="panel-header page-header">
+                <h1>SYSTEM CONFIGURATION SETTINGS</h1>
+            </div>
+            <div class="instrument-panel max-width-form">
+                <form class="param-form" onsubmit="return false;">
+                    <div class="form-group">
+                        <label>WebSocket Server Port:</label>
+                        <input type="text" value="8765">
+                    </div>
+                    <div class="form-group">
+                        <label>rPPG Algorithm:</label>
+                        <select>
+                            <option>POS (Plane-Orthogonal-to-Skin)</option>
+                            <option>CHROM (Chrominance-based)</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Filter Order (Butterworth):</label>
+                        <input type="number" value="4">
+                    </div>
+                    <div class="form-group">
+                        <label>Audio Pre-emphasis Coeff:</label>
+                        <input type="text" value="0.97">
+                    </div>
+                    <button class="btn-submit" style="background-color: #3A3A3A;">SAVE CONFIGURATION</button>
+                </form>
+            </div>
+        </section>
+
+        <!-- TAB: CLINICAL BIOMEDICAL DIAGNOSTIC WORKSTATION -->
+        <section id="tab-diagnostics" class="tab-content workstation-view">
+            <!-- 1. Workstation Header Bar -->
+            <div class="ws-header-bar">
+                <div class="ws-header-titles">
+                    <div class="ws-title-row">
+                        <span class="ws-badge-id">WORKSTATION #WS-01</span>
+                        <h1 class="ws-main-title">CLINICAL BIOMEDICAL DIAGNOSTIC STUDIO</h1>
+                    </div>
+                    <div class="ws-subtitle">
+                        Authentic Multi-Spectral Photoplethysmography & Chromophore Pathology Extraction
+                    </div>
+                </div>
+
+                <div class="ws-header-actions">
+                    <div class="ws-system-status" id="ws-system-status-container">
+                        <span class="ws-status-dot" id="ws-status-dot"></span>
+                        <span class="ws-status-text" id="ws-status-text">SYSTEM READY | CALIBRATED SENSOR (HQVGA/15FPS)</span>
+                    </div>
+                    <label class="ws-auto-capture-label" title="Automatically captures snapshot once full face is verified and locked">
+                        <input type="checkbox" id="chk-auto-capture" onchange="toggleAutoCapture(this)">
+                        <span>AUTO-CAPTURE ON FULL FACE</span>
+                    </label>
+                    <button class="btn-ws-primary" id="btn-tab-capture" onclick="captureDiagnosticSnapshot()">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                        CAPTURE DIAGNOSTIC MOMENT
+                    </button>
+                    <button class="btn-ws-secondary" onclick="exportDiagnosticJSON()">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        EXPORT JSON
+                    </button>
+                </div>
+            </div>
+
+            <!-- Clinical Alignment Guidance Alert Banner -->
+            <div id="full-face-alert-banner" class="clinical-alert-banner" style="display: none;">
+                <div class="alert-banner-content">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                    <span id="full-face-alert-text">FULL FACE REQUIRED: Please position patient so their entire face is visible within the sensor frame.</span>
+                </div>
+                <button class="alert-banner-close" onclick="dismissFaceAlert()">&times;</button>
+            </div>
+
+            <!-- 2. Biomedical Diagnostic Workflow Indicator Strip -->
+            <div class="ws-workflow-strip">
+                <div class="ws-step-node active" id="step-node-1">
+                    <span class="ws-step-num">01</span>
+                    <span class="ws-step-label">Frame Captured</span>
+                </div>
+                <div class="ws-step-arrow">→</div>
+                <div class="ws-step-node active" id="step-node-2">
+                    <span class="ws-step-num">02</span>
+                    <span class="ws-step-label">ROI Segmentation</span>
+                </div>
+                <div class="ws-step-arrow">→</div>
+                <div class="ws-step-node active" id="step-node-3">
+                    <span class="ws-step-num">03</span>
+                    <span class="ws-step-label">Chromophore Extraction</span>
+                </div>
+                <div class="ws-step-arrow">→</div>
+                <div class="ws-step-node active" id="step-node-4">
+                    <span class="ws-step-num">04</span>
+                    <span class="ws-step-label">Biomarker Calculation</span>
+                </div>
+                <div class="ws-step-arrow">→</div>
+                <div class="ws-step-node active" id="step-node-5">
+                    <span class="ws-step-num">05</span>
+                    <span class="ws-step-label">Clinical Flag</span>
+                </div>
+                <div class="ws-workflow-meta" id="ws-workflow-timestamp">
+                    TS: --:--:-- | SYSTOLIC PEAK
+                </div>
+            </div>
+
+            <!-- 3. Main 12-Column Grid (40% Left / 60% Right) -->
+            <div class="ws-main-grid">
+                <!-- Left Column (~40%): Image & Anatomical Analysis -->
+                <div class="ws-left-column">
+                    <!-- Segmented View Mode Toolbar -->
+                    <div class="ws-roi-toolbar">
+                        <button class="ws-view-btn active" data-view="annotated_roi" onclick="switchDiagView('annotated_roi')">
+                            <span class="btn-pip pip-emerald"></span>Anatomical ROIs
+                        </button>
+                        <button class="ws-view-btn" data-view="erythema_map" onclick="switchDiagView('erythema_map')">
+                            <span class="btn-pip pip-red"></span>Erythema / Perfusion
+                        </button>
+                        <button class="ws-view-btn" data-view="jaundice_map" onclick="switchDiagView('jaundice_map')">
+                            <span class="btn-pip pip-amber"></span>Scleral Icterus
+                        </button>
+                        <button class="ws-view-btn" data-view="cyanosis_map" onclick="switchDiagView('cyanosis_map')">
+                            <span class="btn-pip pip-blue"></span>Hypoxia / Cyanosis
+                        </button>
+                        <button class="ws-view-btn" data-view="raw" onclick="switchDiagView('raw')">
+                            <span class="btn-pip pip-slate"></span>Raw Clinical
+                        </button>
+                    </div>
+
+                    <!-- Facial Diagnostic Image Card -->
+                    <div class="ws-image-card">
+                        <!-- Top Metadata Strip -->
+                        <div class="ws-img-meta-strip">
+                            <span class="meta-item" id="ws-meta-frame">FRAME #00124</span>
+                            <span class="meta-sep">|</span>
+                            <span class="meta-item" id="ws-meta-roi">ROI DETECTED (5 ZONES)</span>
+                            <span class="meta-sep">|</span>
+                            <span class="meta-item" id="ws-meta-motion">MOTION LOW</span>
+                            <span class="meta-sep">|</span>
+                            <span class="meta-item" id="ws-meta-quality">QUALITY HIGH</span>
+                            <span class="meta-sep">|</span>
+                            <span class="meta-badge" id="ws-meta-phase">SYSTOLIC PEAK</span>
+                        </div>
+
+                        <!-- Image Display Container -->
+                        <div class="ws-img-container">
+                            <img id="tab-diag-main-img" class="ws-diagnostic-img" src="" alt="Clinical Diagnostic Capture" style="display: none;" />
+                            <div id="tab-diag-placeholder" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 260px; background: #161816; color: #889988; font-family: monospace; font-size: 11px; gap: 8px; border-radius: 4px;">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v4l3 3"></path></svg>
+                                <span>AWAITING DIAGNOSTIC CAPTURE</span>
+                                <span style="font-size: 9px; color: #556655;">ALIGN PATIENT FULL FACE &amp; CLICK 'CAPTURE DIAGNOSTIC MOMENT'</span>
+                            </div>
+                            <div class="ws-img-tag" id="tab-diag-view-tag" style="display: none;">ANATOMICAL ROIS</div>
+                        </div>
+
+                        <!-- Heatmap Scale / Color Legend -->
+                        <div class="ws-colormap-strip" id="ws-colormap-strip">
+                            <div class="colormap-label" id="colormap-label-left">0.0 (MIN ABSORPTION)</div>
+                            <div class="colormap-gradient" id="colormap-bar"></div>
+                            <div class="colormap-label" id="colormap-label-right">MAX CONCENTRATION</div>
+                        </div>
+                    </div>
+
+                    <!-- Structured Clinical Information Panel (Anatomical Zones) -->
+                    <div class="ws-roi-info-panel">
+                        <div class="roi-panel-header">
+                            <span class="roi-panel-title">STRUCTURED ANATOMICAL ROI ANALYSIS</span>
+                            <span class="roi-panel-subtitle">5 SEGMENTED CHROMOPHORE REGIONS</span>
+                        </div>
+                        <div class="roi-zones-list">
+                            <div class="roi-zone-row">
+                                <span class="zone-pip zone-amber"></span>
+                                <div class="zone-meta">
+                                    <div class="zone-name">FOREHEAD (FRONTAL MICROVASCULATURE)</div>
+                                    <div class="zone-desc">Dermal capillary bed density & systemic microvascular tone (HbO2 absorption spectrum).</div>
+                                </div>
+                            </div>
+                            <div class="roi-zone-row">
+                                <span class="zone-pip zone-emerald"></span>
+                                <div class="zone-meta">
+                                    <div class="zone-name">BILATERAL CHEEKS (MALAR ZONES)</div>
+                                    <div class="zone-desc">Cutaneous flush, autonomic vasomotor regulation, and cranial nerve VII perfusion symmetry.</div>
+                                </div>
+                            </div>
+                            <div class="roi-zone-row">
+                                <span class="zone-pip zone-cyan"></span>
+                                <div class="zone-meta">
+                                    <div class="zone-name">OCULAR SCLERA (BULBAR CONJUNCTIVA)</div>
+                                    <div class="zone-desc">Extracellular bilirubin pigment deposition screening (460 nm absorption, icterus index).</div>
+                                </div>
+                            </div>
+                            <div class="roi-zone-row">
+                                <span class="zone-pip zone-pink"></span>
+                                <div class="zone-meta">
+                                    <div class="zone-name">PERIORAL & LIPS (VERMILION BORDER)</div>
+                                    <div class="zone-desc">Central mucous membrane arterial oxygenation & deoxygenated hemoglobin ratio (Hb / HbO2).</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right Column (~60%): Clinical Triage & Laboratory Biomarkers -->
+                <div class="ws-right-column">
+                    <!-- Redesigned Clinical Triage Summary -->
+                    <div class="ws-triage-panel" id="tab-diag-triage-panel">
+                        <div class="triage-header">
+                            <div class="triage-title-group">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+                                <span>CLINICAL TRIAGE & PATHOLOGY OBSERVATIONS</span>
+                            </div>
+                            <span class="triage-overall-badge" id="triage-overall-badge">SCREENING EVALUATION</span>
+                        </div>
+
+                        <!-- Section A: 4 Structured Chromophore Observations -->
+                        <div class="triage-observations-grid">
+                            <div class="triage-obs-card" id="obs-card-perfusion">
+                                <div class="obs-top">
+                                    <span class="obs-label">PERFUSION</span>
+                                    <span class="obs-status-badge NORMAL" id="obs-status-perfusion">NORMAL</span>
+                                </div>
+                                <div class="obs-metric" id="obs-val-perfusion">--</div>
+                                <div class="obs-detail" id="obs-detail-perfusion">Analyzing microvascular capillary tone...</div>
+                            </div>
+
+                            <div class="triage-obs-card" id="obs-card-pallor">
+                                <div class="obs-top">
+                                    <span class="obs-label">PALLOR</span>
+                                    <span class="obs-status-badge NORMAL" id="obs-status-pallor">NORMAL</span>
+                                </div>
+                                <div class="obs-metric" id="obs-val-pallor">--</div>
+                                <div class="obs-detail" id="obs-detail-pallor">Evaluating tissue hemoglobin coloration...</div>
+                            </div>
+
+                            <div class="triage-obs-card" id="obs-card-icterus">
+                                <div class="obs-top">
+                                    <span class="obs-label">ICTERUS</span>
+                                    <span class="obs-status-badge NORMAL" id="obs-status-icterus">NORMAL</span>
+                                </div>
+                                <div class="obs-metric" id="obs-val-icterus">--</div>
+                                <div class="obs-detail" id="obs-detail-icterus">Assessing scleral bilirubin deposition...</div>
+                            </div>
+
+                            <div class="triage-obs-card" id="obs-card-oxygenation">
+                                <div class="obs-top">
+                                    <span class="obs-label">OXYGENATION</span>
+                                    <span class="obs-status-badge NORMAL" id="obs-status-oxygenation">NORMAL</span>
+                                </div>
+                                <div class="obs-metric" id="obs-val-oxygenation">--</div>
+                                <div class="obs-detail" id="obs-detail-oxygenation">Inspecting vermilion border oxygenation...</div>
+                            </div>
+                        </div>
+
+                        <!-- Section B: Clinical Interpretation & Recommendations -->
+                        <div class="triage-interpretation-box" id="tab-diag-interp-box">
+                            <div class="interp-heading">CLINICAL INTERPRETATION & ACTIONABLE FOLLOW-UP</div>
+                            <div class="interp-text" id="tab-diag-interp-text">
+                                Aligning patient with clinical camera sensor... Click 'Capture Diagnostic Moment' to initiate comprehensive multi-spectral screening.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Professional Laboratory-Results Biomarkers Table -->
+                    <div class="ws-lab-card">
+                        <div class="lab-card-header">
+                            <span class="lab-title">PHYSIOLOGICAL CHROMOPHORE BIOMARKER ASSAY</span>
+                            <span class="lab-meta">AUTHENTIC SPECTROPHOTOMETRIC QUANTIFICATION</span>
+                        </div>
+
+                        <div class="lab-table-wrapper">
+                            <table class="ws-lab-table">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 25%;">Biomarker / Chromophore</th>
+                                        <th style="width: 20%;">Measured Value</th>
+                                        <th style="width: 16%;">Reference Interval</th>
+                                        <th style="width: 11%;">Status</th>
+                                        <th style="width: 28%;">Clinical Indication & Physiology</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="tab-diag-biomarkers-body">
+                                    <tr><td colspan="5" style="text-align:center; color: var(--text-muted); padding: 25px;">No diagnostic snapshot captured yet.</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 4. Diagnostic Metrics Overview (Lower Whitespace Module) -->
+            <div class="ws-metrics-overview">
+                <div class="overview-module">
+                    <div class="module-header">
+                        <span class="module-title">FRAME CLARITY INDEX</span>
+                        <span class="module-tag">LAPLACIAN VAR</span>
+                    </div>
+                    <div class="module-value-row">
+                        <span class="module-value" id="ov-val-clarity">--</span>
+                        <span class="module-unit">σ²</span>
+                    </div>
+                    <div class="module-status-line">
+                        <span class="module-threshold">REF: > 100.0</span>
+                        <span class="module-badge" id="ov-badge-clarity">STANDBY</span>
+                    </div>
+                </div>
+
+                <div class="overview-module">
+                    <div class="module-header">
+                        <span class="module-title">HEMIFACIAL SYMMETRY</span>
+                        <span class="module-tag">VASOMOTOR DISPARITY</span>
+                    </div>
+                    <div class="module-value-row">
+                        <span class="module-value" id="ov-val-symmetry">--</span>
+                        <span class="module-unit">%</span>
+                    </div>
+                    <div class="module-status-line">
+                        <span class="module-threshold">REF: < 5.0%</span>
+                        <span class="module-badge" id="ov-badge-symmetry">STANDBY</span>
+                    </div>
+                </div>
+
+                <div class="overview-module">
+                    <div class="module-header">
+                        <span class="module-title">MICROVASCULAR PERFUSION</span>
+                        <span class="module-tag">DAWSON-DIFFEY EI</span>
+                    </div>
+                    <div class="module-value-row">
+                        <span class="module-value" id="ov-val-perfusion">--</span>
+                        <span class="module-unit">EI</span>
+                    </div>
+                    <div class="module-status-line">
+                        <span class="module-threshold">REF: 10.0 - 23.0</span>
+                        <span class="module-badge" id="ov-badge-perfusion">STANDBY</span>
+                    </div>
+                </div>
+
+                <div class="overview-module">
+                    <div class="module-header">
+                        <span class="module-title">ACTIVE CLINICAL FLAGS</span>
+                        <span class="module-tag">SCREENING RESULTS</span>
+                    </div>
+                    <div class="module-value-row">
+                        <span class="module-value" id="ov-val-flags">--</span>
+                        <span class="module-unit" id="ov-unit-flags">/ 6 TOTAL</span>
+                    </div>
+                    <div class="module-status-line">
+                        <span class="module-threshold">TARGET: 0 FLAGS</span>
+                        <span class="module-badge" id="ov-badge-flags">EVALUATING</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <script src="app.js?v=7"></script>
+</body>
+</html>

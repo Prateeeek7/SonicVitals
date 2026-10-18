@@ -1,0 +1,51 @@
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x2a (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x44c
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a80
+entry 0x403c98d0
+Booting...
+Testing SDA: 1 SCL: 2
+Testing SDA: 4 SCL: 5
+Testing SDA: 8 SCL: 9
+Testing SDA: 21 SCL: 22
+Testing SDA: 41 SCL: 42
+Testing SDA: 2 SCL: 1
+CRITICAL: No OLED found on any common Freenove pins!
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x28 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x44c
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a80
+entry 0x403c98d0
+Booting...
+Testing SDA: 1 SCL: 2
+Testing SDA: 4 SCL: 5
+Testing SDA: 8 SCL: 9
+Testing SDA: 21 SCL: 22
+Testing SDA: 41 SCL: 42
+Testing SDA: 2 SCL: 1
+CRITICAL: No OLED found on any common Freenove pins!
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x1 (POWERON),boot:0x28 (SPI_FAST_FLASH_BOOT)
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce3808,len:0x44c
+load:0x403c9700,len:0xbd8
+load:0x403cc700,len:0x2a80
+entry 0x403c98d0
+Booting...
+Testing SDA: 1 SCL: 2
+Testing SDA: 4 SCL: 5
+Testing SDA: 8 SCL: 9
+Testing SDA: 21 SCL: 22
+Testing SDA: 41 SCL: 42
+Testing SDA: 2 SCL: 1
+CRITICAL: No OLED found on any common Freenove pins!

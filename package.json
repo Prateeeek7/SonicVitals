@@ -1,0 +1,21 @@
+{
+  "name": "sonicvitals",
+  "version": "1.0.0",
+  "description": "Adaptive Physiological Sensing Platform using Contactless Vision & Thoracic Acoustics",
+  "scripts": {
+    "start": "./start.sh",
+    "dev": "./start.sh",
+    "web": "npx -y http-server ./Frontend -p 3000",
+    "gui": "python Server/gui.py",
+    "server": "python Server/server.py",
+    "emulate": "python Server/gui.py --video ./sample.mp4 --audio ./sample.wav"
+  },
+  "keywords": [
+    "rppg",
+    "acoustics",
+    "dsp",
+    "sensor-fusion"
+  ],
+  "author": "VIT SENSE Researchers",
+  "license": "MIT"
+}

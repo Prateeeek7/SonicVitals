@@ -1,0 +1,1345 @@
+﻿\documentclass[journal]{IEEEtran}
+
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{dblfloatfix}
+\usepackage{float}
+
+\title{An Integrated IoT Framework for Real-Time Environmental Monitoring, Forecasting, and Anomaly Detection}
+
+\author{
+Pratik~Kumar,
+Nikunj~Goydani,
+and~Vetriveeran~Rajamanai
+\thanks{
+All authors are with Vellore Institute of Technology, Vellore, India.
+Pratik Kumar (e-mail: pratik.kumar2024a@vitstudent.ac.in);
+Nikunj Goydani (e-mail: nikunj.goydani2024@vitstudent.ac.in);
+Vetriveeran Rajamanai (e-mail: vetriveeran.r@vit.ac.in).
+Vetriveeran Rajamanai is the corresponding author.
+}
+}
+
+\begin{document}
+
+\maketitle
+
+% -------------------------------------------------
+% Abstract
+% -------------------------------------------------
+\begin{abstract}
+Environmental monitoring using resource-constrained Internet of Things (IoT)
+nodes is limited by the availability of analog-to-digital converter (ADC)
+channels, while existing studies often address multi-parameter sensing, cloud
+monitoring, forecasting, and anomaly detection as separate components. This
+study presents an integrated and cost-efficient environmental monitoring
+framework that uses a CD4051 analog multiplexer with an ESP8266 to acquire
+temperature, humidity, gas concentration, light intensity, and soil-moisture
+measurements through a single ADC channel, together with wireless data
+transmission, backend processing, and machine-learning analytics. The system
+was evaluated using five days of laboratory measurements collected at 10-s
+intervals. Independent Long Short-Term Memory (LSTM) models were developed
+for parameter-wise short-term forecasting, and Isolation Forest was employed
+for unsupervised anomaly detection using only recorded sensor data. The system
+provided reliable continuous data transmission with no observable
+channel-to-channel crosstalk during multiplexed acquisition. The analytical
+evaluation achieved 94\% agreement across 9,046 recorded observations, based
+on comparison with reference measurements obtained from existing laboratory
+equipment. Temperature recorded a mean of 22.89~$^\circ$C
+(19.70--26.30~$^\circ$C), humidity 49.82\% (38.50--60.50\%), gas level
+77.68 (61--94), and light intensity 533.73 (373--900). Strong correlations
+were observed between temperature and humidity ($-0.89$), temperature and
+light intensity ($+0.85$), and humidity and light intensity ($-0.87$).
+Overall, the proposed framework demonstrates the feasibility of integrating
+ADC-efficient multi-parameter sensing with forecasting and anomaly detection
+in a single low-resource IoT node, providing a cost-efficient alternative to
+architectures requiring additional ADC resources or separately deployed
+analytical components.
+\end{abstract}
+
+% -------------------------------------------------
+% Keywords
+% -------------------------------------------------
+\begin{IEEEkeywords}
+Environmental Monitoring, Internet of Things (IoT), Analog Multiplexing,
+ESP8266, CD4051, Multi-Parameter Sensing, LSTM Forecasting,
+Anomaly Detection, Isolation Forest, Predictive Analytics
+\end{IEEEkeywords}
+
+% =================================================
+% I. INTRODUCTION
+% =================================================
+\section{Introduction}
+
+In the last few years, the importance of environmental monitoring has
+increased significantly as regards the smart building sector, the precision
+agriculture industry, industrial safety and laboratory quality assurance
+\cite{ref1}. The increased use of low-cost microcontrollers and their ability
+to connect to networks has made it possible to create devices that can use
+these microcontrollers to form distributed sensor networks capable of
+measuring temperature, humidity, air quality, light, and soil conditions in
+real-time, as well as transmitting that data to cloud or edge analytics
+platforms \cite{ref2}. The research in this area covers the integration of
+hardware, the development of communication protocols, the storage of data,
+the creation of data visualizations, and how machine learning (ML) can be
+applied for detection of anomalies and predictive analytics \cite{ref3}.
+
+One of the most significant challenges with low-cost Internet of Things
+(IoT) nodes \cite{ref4} is the lack of analog-to-digital converter (ADC)
+resources. Many of the commonly used microcontrollers feature only one or a
+few ADC channels, and as a result, they have a limited number of analog
+sensors that can be connected without using either an external expansion
+method or multiple devices. Historically, analog multiplexers (MX) have been
+used in embedded systems to allow multiple analog sources to share the same
+ADC \cite{ref5}.
+
+Current research is focused on the incorporation of a variety of
+environmental factors into one single monitoring system. This process
+includes data collection, data storage, data visualization, and using
+machine learning processes for prediction of data and detection of
+anomalies \cite{ref6}. The significance of the research is emphasized by
+the observation that models have been assessed using real laboratory and
+actual data. The paper describes the development and assessment of the
+environment monitoring device which consists of three components: a
+hardware acquisition component which makes use of a CD4051 analog
+multiplexer along with an ESP8266 microcontroller \cite{ref7}. The device
+can measure different parameters such as gas, light and moisture, digital
+temperature and humidity by means of one ADC. The second component includes
+a backend and a web-based dashboard which are used for storing and
+visualizing the data \cite{ref8}. The last component is the machine
+learning pipeline which performs time-series forecasting with the use of
+LSTM algorithms for data collected in laboratory environments \cite{ref9}.
+
+This study is positioned as a research-oriented investigation into the
+co-design of hardware, software, and machine-learning components,
+emphasizing reproducible implementation strategies, structured data
+handling practices, and systematic evaluation methodologies. The principal
+contributions include the development of a documented interfacing
+methodology for integrating a CD4051 MX with an ESP8266 microcontroller
+\cite{ref10}, design approaches for constructing an end-to-end
+Environmental Monitoring Device (EMD) \cite{ref11}, the generation of a
+multi-parameter temporal environmental dataset collected under controlled
+laboratory conditions, and the realization of a structured machine-learning
+framework enabling prediction and anomaly detection using exclusively real
+laboratory measurements \cite{ref12}.
+%\section*{Abbreviations}
+
+The abbreviations used throughout this manuscript are summarized in
+Table~\ref{tab:abbreviations}.
+
+\begin{table}[!t]
+    \centering
+    \caption{Abbreviations used in this manuscript.}
+    \label{tab:abbreviations}
+    \renewcommand{\arraystretch}{1.08}
+    \setlength{\tabcolsep}{5pt}
+
+    \begin{tabular}{ll}
+        \toprule
+        \textbf{Abbreviation} & \textbf{Definition} \\
+        \midrule
+
+        ADC  & Analog-to-Digital Converter \\
+        API  & Application Programming Interface \\
+        DAC  & Digital-to-Analog Converter \\
+        CoAP & Constrained Application Protocol \\
+        DHT22 & Digital temperature/humidity sensor (model) \\
+        EMD  & Environmental Monitoring Device \\
+        GPIO & General Purpose Input/Output \\
+        I2C  & Inter-Integrated Circuit (serial bus) \\
+        IoT  & Internet of Things \\
+        LDR  & Light-Dependent Resistor \\
+        MAE  & Mean Absolute Error \\
+        MCU  & Microcontroller Unit \\
+        ML   & Machine Learning \\
+        MQTT & Message Queuing Telemetry Transport \\
+        MX   & Multiplexer \\
+        POST & HTTP request method \\
+        REST & Representational State Transfer \\
+        RH   & Relative Humidity \\
+        RMSE & Root Mean Square Error \\
+        SCL  & Serial Clock (I2C line) \\
+        LPG  & Liquefied Petroleum Gas \\
+        LSTM & Long Short-Term Memory \\
+
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+
+% -------------------------------------------------
+% Research Gap
+% -------------------------------------------------
+\subsection{Research Gap and Problem Statement}
+
+The widespread use of environmentally monitored Internet of Things systems
+is being hampered by the availability of low-cost microcontroller hardware
+for practical use in an Multi-Parameter Sensing Architecture (MPSA). The
+limitations in these hardware products, due to a lack of ADC capabilities,
+hinder the ability to integrate multiple analogue sensors. Most current
+studies on sensing, backend data management, or ML analysis examine each
+type of data as independent from one another rather than as a unified pair,
+concluding with multiple extreme solutions that have limited scalability or
+reproducibility. Throughout the majority of ML-based monitoring studies,
+there are instances where either synthetic data or augmented data is used
+for producing results, creating difficulty in creating reliable testing
+results in actual laboratory and industrial environments.
+
+% -------------------------------------------------
+% Proposed Framework
+% -------------------------------------------------
+\subsection{Proposed Framework Overview}
+
+In an effort to improve upon identified shortcomings, the proposed work
+introduces a comprehensive environmental monitoring platform which
+incorporates the use of multiplexed analog sensors, scalable cloud data
+storage and visualization capabilities as well as machine learning
+analytics all part of an overarching architectural framework. In order to
+achieve improved analog sensing capabilities for use with the ESP8266
+microcontroller, the utilization of a CD4051 analog multiplexer will be
+essential to allow for efficient multi-parameter data collection using
+multiplexed analog sensors. The proposed system includes a Flask-based
+backend for data management, storage and visualization, as well as a
+React-based dashboard for live monitoring of environmental conditions.
+Additionally, the proposed framework also integrates predictive and
+anomaly detection models, specifically long short-term memory (LSTM) and
+isolation forest algorithms, that have only been trained on representative
+laboratory-assessed observations in order to ensure the successful
+implementation of the proposed monitoring solution in a practical
+application and operationally reliable manner.
+
+% -------------------------------------------------
+% Contributions
+% -------------------------------------------------
+\subsection{Contributions of the Study}
+
+The principal contributions of this study are as follows:
+
+\begin{itemize}
+    \item A flexible, multi-sensor interface that allows for multi-parameter
+    environmental monitoring utilizing a single ADC microcontroller.
+
+    \item Complete integration of a total environmental monitoring system,
+    from data collection to backend storage, to real-time display.
+
+    \item Creation of a natural laboratory environmental dataset that can
+    be utilized in the evaluation of the system, without reliance on
+    synthetic data.
+
+    \item Development of a fully functional ML analytics framework consisting
+    of LSTM time-series forecast and isolation forest anomaly detection.
+
+    \item Documentation of the hardware-software co-design processes in
+    order to provide for reproducibility and to allow for additional
+    research to build on existing work.
+\end{itemize}
+
+% =================================================
+% II. MATERIALS AND METHODS
+% =================================================
+\section{Materials and Methods}
+
+This section describes the system architecture of the Environmental
+Monitoring Device (EMD). The hardware components involved in the
+multi-parameter sensing system, including ADC multiplexing, backend
+processing and data management, and real-time visualization, are discussed.
+The workflow of the machine-learning algorithms used for prediction and
+anomaly detection is also presented.
+
+In general, the proposed architecture consists of six integrated layers.
+First, the edge sensing and data acquisition layer employs ESP8266-based
+sensor nodes for acquiring multiple environmental parameters. Second, the
+hardware design and integration layer uses a CD4051 analog multiplexer to
+enable multiple analog sensors to share a single ADC channel of the
+ESP8266. Third, the communication and backend data management layer is
+implemented using Flask for data ingestion and access. Fourth, the database
+and service layer provides persistent storage for the collected time-series data. Fifth,
+the visualization and user interaction layer provides authentication,
+configuration management, and a React-based frontend dashboard for
+real-time monitoring and analytics. Finally, the machine-learning and
+analytics layer processes the collected sensor data for forecasting and
+anomaly detection.
+
+The architecture enables the ESP8266 to acquire multiple analog
+environmental parameters through a single ADC channel using CD4051
+multiplexing, thereby addressing the hardware constraints of low-cost IoT
+nodes. The acquired measurements are transmitted to the backend for storage
+and subsequent visualization and machine-learning analysis. This integrated
+data pathway supports continuous monitoring while providing the foundation
+for forecasting and anomaly detection. The overall architecture integrates
+sensor data acquisition, multiplexed ADC conversion, backend processing,
+time-series data storage, real-time visualization, and machine-learning-based
+analysis into a unified environmental monitoring framework. The overall
+system architecture and data flow of the proposed EMD are presented in
+Fig.~\ref{fig:architecture}.
+
+% -------------------------------------------------
+% Figure 1
+% -------------------------------------------------
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=\textwidth]{fig1.png}
+    \caption{Overall architecture of the proposed Environmental Monitoring
+    Device (EMD), integrating edge sensing, ADC multiplexing, backend data
+    management, time-series storage, visualization, and machine-learning-based
+    forecasting and anomaly detection.}
+    \label{fig:architecture}
+\end{figure*}
+% =================================================
+% A. EDGE SENSING AND DATA ACQUISITION
+% =================================================
+\subsection{Edge Sensing and Data Acquisition}
+
+The proposed node utilizes an ESP8266MOD microcontroller, which provides a
+single analog-to-digital converter (ADC) input through the A0 pin. The analog
+signals from the MQ-6 gas sensor, light-dependent resistor (LDR), and
+soil-moisture sensor are sequentially connected to the ADC through the CD4051
+analog multiplexer. This arrangement enables multiple analog sensors to share
+the single ADC input of the ESP8266.
+
+The following sensors and interface components are integrated with the
+proposed node:
+
+\begin{itemize}
+    \item \textbf{DHT22:} The DHT22 is a digital temperature and humidity
+    sensor connected to GPIO2 of the ESP8266 through a 10~k$\Omega$ resistor.
+    Temperature and humidity measurements are sampled at 10-s intervals.
+
+    \item \textbf{MQ-6:} The MQ-6 gas sensor is powered by 5~V and is used
+    for gas concentration measurement, including LPG-related detection.
+    Its analog output is connected to channel 0 of the CD4051. After
+    selecting the corresponding channel, the analog signal is converted
+    into a digital value through the ESP8266 A0 input.
+
+    \item \textbf{LDR:} The light-dependent resistor is connected to
+    channel 1 of the CD4051. Similar to the MQ-6, its analog signal is
+    routed to the ESP8266 ADC through the multiplexer. A higher ADC value
+    indicates greater light intensity.
+
+    \item \textbf{Soil-Moisture Sensor:} The soil-moisture sensor is
+    connected to channel 2 of the CD4051. Its analog reading is acquired
+    through the ESP8266 ADC, where a higher value indicates wetter soil.
+
+    \item \textbf{CD4051:} The CD4051 is an 8-channel analog multiplexer
+    controlled through the select pins S0, S1, and S2. These control signals
+    are connected to GPIO12 (D6), GPIO13 (D7), and GPIO14 (D5),
+    respectively. The common output Z is connected to the ESP8266 A0 input.
+    Channels 0, 1, and 2 are used for the MQ-6, LDR, and soil-moisture
+    sensors, respectively, while channels 3--7 are reserved for future
+    expansion.
+\end{itemize}
+
+During operation, the firmware selects the CD4051 channels sequentially.
+After each channel selection, a short stabilization delay of approximately
+1--2~ms is introduced before the analog value is acquired through the A0
+input. Every 10~s, the measurements from all five environmental parameters
+are combined into a single JSON message and transmitted to the backend using
+an HTTP POST request. In the event of network connectivity problems or
+sensor-related failures, an error message is displayed on the LCD and the
+transmission is retried.
+
+
+% =================================================
+% B. HARDWARE DESIGN AND INTEGRATION
+% =================================================
+\subsection{Hardware Design and Integration}
+
+The prototype Environmental Monitoring Device (EMD) integrates sensing,
+signal multiplexing, processing, local display, power management, and wireless
+communication within a single IoT node. The physical implementation of the
+prototype is shown in Fig.~\ref{fig:hardware}, while the corresponding
+electrical and communication architecture is presented in
+Fig.~\ref{fig:communication}.
+
+% -------------------------------------------------
+% Figure 2
+% -------------------------------------------------
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\columnwidth]{fig2.png}
+    \caption{Hardware prototype of the proposed Environmental Monitoring
+    Device (EMD), showing the ESP8266 microcontroller, CD4051 analog
+    multiplexer, DHT22 temperature and humidity sensor, MQ-6 gas sensor,
+    LDR, soil-moisture sensor, JHD162A LCD module, and power module.}
+    \label{fig:hardware}
+\end{figure}
+
+The ESP8266MOD acts as the main control unit, performing sensor acquisition,
+data processing, peripheral control, and Wi-Fi communication. Since the
+ESP8266 provides only one analog input, the CD4051 analog multiplexer is used
+to connect the three analog sensors, namely the MQ-6 gas sensor, LDR, and
+soil-moisture sensor, sequentially to the ADC. The ESP8266 selects the
+required CD4051 channel by applying the appropriate digital control signals
+to the multiplexer and subsequently acquires the corresponding sensor signal
+through its ADC. In contrast, the DHT22 temperature and humidity sensor is
+connected directly to the ESP8266 through its digital interface and therefore
+does not require the multiplexer.
+
+The ESP8266 operates in a continuous acquisition cycle. It first obtains
+temperature and humidity measurements from the DHT22 and subsequently
+acquires measurements from the analog sensors through the CD4051. The
+multiplexer enables rapid switching between the analog inputs; however, a
+short stabilization period is provided after each channel transition before
+the ADC conversion is performed. The processed measurements are then
+transmitted from the microcontroller to the network router as JSON messages,
+providing a simple data representation for backend processing.
+
+Figure~\ref{fig:hardware} illustrates the physical arrangement and wiring of
+the prototype, including the placement and interconnection of the sensing,
+processing, display, and power components. The JHD162A 16$\times$2 LCD is
+connected to the ESP8266 through the I$^2$C interface for local display of
+sensor readings and system status. The processed measurements are transmitted
+through the ESP8266 Wi-Fi interface to the backend system, thereby providing
+wireless communication between the sensing node and the data-management
+layer.
+
+During operation, the ESP8266 sequentially controls the MQ-6, LDR, and
+soil-moisture channels through the CD4051, allowing sufficient stabilization
+time before each ADC conversion. Temperature and humidity measurements are
+obtained directly from the DHT22 through its digital interface. Thus,
+Fig.~\ref{fig:hardware} presents the physical implementation of the proposed
+EMD, whereas Fig.~\ref{fig:communication} illustrates the relationships
+among the sensor signals, multiplexer control, power supply, local display,
+and wireless communication.
+
+
+% -------------------------------------------------
+% Figure 3
+% -------------------------------------------------
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=\textwidth]{fig3.png}
+    \caption{Electrical and communication architecture of the proposed
+    Environmental Monitoring Device (EMD), illustrating sensor interfaces,
+    CD4051 channel selection, ESP8266 processing, local display, power
+    connections, and wireless communication with the backend system.}
+    \label{fig:communication}
+\end{figure*}
+% =================================================
+% C. COMMUNICATION AND BACKEND DATA MANAGEMENT
+% =================================================
+\subsection{Communication and Backend Data Management}
+
+The backend system was developed using the Flask framework and provides
+REST-based services for data ingestion, retrieval, statistical analysis,
+system monitoring, and machine-learning inference. The principal API
+endpoints are described as follows:
+
+\begin{itemize}
+
+    \item \textbf{Sensor Data Ingestion:} A POST request from the ESP8266 is
+    sent to the \texttt{/api/sensor-data} endpoint. The endpoint stores
+    timestamped temperature and humidity measurements, \texttt{gas\_analog},
+    \texttt{light\_level}, and \texttt{soil\_moisture} values in the
+    database.
+
+    \item \textbf{Latest Measurements:} A GET request to
+    \texttt{/api/latest} retrieves the most recent measurements of all five
+    environmental parameters for display on the dashboard.
+
+    \item \textbf{Statistical Data:} A GET request to
+    \texttt{/api/stats} retrieves statistical information, including the
+    minimum, maximum, and average values, for a specified time period.
+
+    \item \textbf{System Health:} A GET request to
+    \texttt{/api/health} provides the operational status of the backend and
+    database services.
+
+    \item \textbf{Prediction Services:} The endpoints
+    \texttt{/predict/temperature}, \texttt{/predict/humidity},
+    \texttt{/predict/gas}, \texttt{/predict/light}, and
+    \texttt{/predict/soil} provide LSTM-based predictions for the selected
+    environmental parameter over the requested prediction horizon, such as
+    the next 1--168~h.
+
+\end{itemize}
+
+
+% =================================================
+% D. DATABASE AND SERVICE LAYER
+% =================================================
+\subsection{Database and Service Layer}
+
+The database and service layer provides persistent storage and supporting
+services for the environmental monitoring framework. The collected sensor
+measurements are stored as timestamped records, enabling efficient retrieval
+of historical observations for visualization, statistical analysis, and
+machine-learning applications.
+
+For cloud deployment, the database layer supports scalable cloud-based
+storage, allowing the collected environmental data to remain accessible to
+the backend services and analytical modules. The service layer manages the
+interaction between the stored data and the application components,
+providing structured access to sensor measurements, statistical information,
+system status, and machine-learning outputs. This separation of data
+persistence and service functionality enables the monitoring framework to
+maintain continuous data availability while supporting subsequent analysis
+and visualization.
+
+
+% =================================================
+% E. VISUALIZATION AND USER INTERACTION
+% =================================================
+\subsection{Visualization and User Interaction}
+
+Input validation and error handling are implemented to ensure reliable
+interaction between the application and the underlying data services. The
+visualization layer maintains the same data structure for both local
+SQLite-based deployment and cloud-based PostgreSQL deployment, enabling
+consistent data handling across deployment environments.
+
+\begin{itemize}
+
+    \item \textbf{Dashboard:} The dashboard is implemented as a single-page
+    web application using React with Vite, together with Material UI and
+    Plotly libraries. It provides real-time monitoring, historical data
+    visualization, prediction display, reporting, and system-status
+    information.
+
+    \item \textbf{Real-Time and Archived Data Visualization:} Users can
+    visualize the five environmental parameters with an automatic-update
+    option. A selectable time range is provided, together with zooming and
+    panning functions for detailed examination of the recorded data.
+
+    \item \textbf{LSTM Predictions:} The dashboard provides graphical
+    visualization of LSTM predictions for the selected environmental
+    parameters over a specified prediction horizon, such as the next 24~h.
+    The prediction values are internally normalized, while the corresponding
+    original-scale values are displayed when the user hovers over the
+    plotted data.
+
+    \item \textbf{PDF Export:} A monitoring report can be generated and
+    downloaded in PDF format through the Reports page or by invoking the
+    \texttt{POST /api/reports/generate} endpoint with the PDF format.
+
+    \item \textbf{System Status:} The dashboard displays the date and time
+    of the latest update together with the operational state of the backend
+    and network connection.
+
+    \item \textbf{Alert Settings:} An Alerts page allows users to configure
+    threshold values for temperature (minimum and maximum), humidity
+    (minimum and maximum), light level/LDR (minimum and maximum), soil
+    moisture (minimum and maximum), and gas concentration (maximum). The
+    configured thresholds are stored in the browser using
+    \texttt{localStorage}. The page also displays anomalies detected by the
+    backend through the \texttt{GET /api/anomalies} endpoint for the previous
+    24~h, including timestamps and corresponding sensor values.
+
+\end{itemize}
+
+
+% =================================================
+% F. MACHINE LEARNING AND ANALYTICS
+% =================================================
+\subsection{Machine Learning and Analytics}
+
+The machine-learning pipeline processes only recorded sensor data, such as
+the measurements obtained during the five-day laboratory deployment.
+Synthetic or artificially generated time-series data are not included in
+the analysis. The major stages of the machine-learning pipeline are
+described below.
+
+\begin{itemize}
+
+    \item \textbf{Data:} The time-series measurements of temperature,
+    humidity, \texttt{gas\_analog}, \texttt{light\_level}, and
+    \texttt{soil\_moisture}, together with their timestamps, are retrieved
+    from the database. Synthetic or generated time-series data are excluded
+    from the training data.
+
+    \item \textbf{Preprocessing:} Rolling means and change-based features
+    are generated for the environmental parameters. Additional temporal
+    features, such as time of day and day of week, can optionally be
+    incorporated. The data are normalized using methods such as
+    \texttt{MinMaxScaler}. Missing observations are handled before model
+    training, for example, by replacing missing values with the corresponding
+    column mean.
+
+    \item \textbf{Training:} Independent LSTM models are developed for each
+    of the five environmental parameters. The models are trained using
+    sequences of previous observations to predict future values.
+    Isolation Forest is employed to identify anomalous observations from
+    the same recorded dataset.
+
+    \item \textbf{Evaluation:} The models are evaluated using a hold-out or
+    time-based data split. Regression performance is assessed using metrics
+    such as mean absolute error (MAE) and root mean square error (RMSE),
+    whereas anomaly detection performance is evaluated using measures such
+    as precision and recall.
+
+    \item \textbf{Deployment:} The trained models and corresponding
+    normalization scalers are loaded by the Flask backend. Cloud-based
+    inference is performed through the prediction endpoints, enabling the
+    generated forecasts to be accessed by the frontend monitoring system.
+
+\end{itemize}
+
+The collected time-series data are therefore processed using rolling and
+change-based features within the machine-learning pipeline. Independent
+LSTM models are developed for each environmental parameter, while anomalies
+are detected using Isolation Forest. The prediction inference process begins
+with the backend prediction services and converts the recorded sensor data
+into forecasting and anomaly-related information for integration with the
+monitoring system. The complete machine-learning workflow is illustrated in
+Fig.~\ref{fig:ml_pipeline}.
+
+
+% -------------------------------------------------
+% Figure 4
+% -------------------------------------------------
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=\textwidth]{fig4.png}
+    \caption{Machine-learning pipeline and analytics layer of the proposed
+    EMD, showing the sequential stages of recorded sensor-data retrieval,
+    preprocessing, model training, evaluation, and deployment. The pipeline
+    uses LSTM models for parameter-wise forecasting and Isolation Forest for
+    anomaly detection, producing forecasts and anomaly-related outputs for
+    integration with the monitoring system.}
+    \label{fig:ml_pipeline}
+\end{figure*}
+% =================================================
+% III. RESULTS
+% =================================================
+\section{Results}
+
+The experimental evaluation was conducted over five days of continuous
+operation in the laboratory. Sensor data were collected at 10-s intervals
+and subsequently processed by the backend system. To avoid data leakage, a
+strict temporal split was applied to preserve the chronological order of
+the recorded data between training and testing datasets. Quality-of-service
+checks were performed to verify that the time-series data maintained
+consistent duration and sampling intervals before machine-learning-based
+prediction. This approach provides consistent conditions for evaluating
+LSTM forecasting and Isolation Forest anomaly detection across multiple
+runs.
+
+\subsection{Sensor Data Acquisition}
+
+Sensor data were continuously collected for five environmental parameters:
+temperature, humidity, \texttt{gas\_analog}, \texttt{light\_level}, and
+\texttt{soil\_moisture}. The DHT22 provided temperature and humidity
+measurements, while the analog parameters, namely gas, light, and soil
+moisture, were acquired through CD4051 multiplexed switching with a
+settling time of approximately 1--2~ms after each channel selection.
+Initial signal-stability tests indicated only a small amount of noise in
+the recorded data. Therefore, the collected measurements were directly
+used for subsequent training and evaluation.
+
+\subsection{Backend and User Interface}
+
+The Flask-based backend APIs received and processed the sensor measurements,
+while the React-based interface provided visualization of both real-time
+and historical data for all five parameters. The interface also provided
+prediction and report-export functionalities. The responses from the
+aggregation and prediction services exhibited acceptable latency during
+laboratory testing, enabling interactive monitoring and smooth updating of
+the displayed visualizations.
+
+\subsection{Machine Learning Results}
+
+LSTM models were trained independently for the five target parameters using
+the data collected during the five-day laboratory deployment. The models
+learned temporal dependencies from previous observations to generate
+short-term predictions. An Isolation Forest model was trained using the
+same recorded sensor data for anomaly detection. Model evaluation was
+performed using previously unseen temporal segments of the dataset, thereby
+maintaining chronological separation between training and evaluation data.
+
+The anomaly detection results identified significant deviations in
+parameters such as gas level and temperature, while the LSTM predictions
+followed the short-term trends observed in the recorded measurements.
+
+% -------------------------------------------------
+% Figure 5
+% -------------------------------------------------
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\columnwidth]{fig5.png}
+    \caption{Real-time visualization interface of the proposed EMD,
+    displaying temperature, relative humidity, gas level, light intensity,
+    and soil-moisture measurements together with the latest data-update
+    time and 24-h statistical summaries.}
+    \label{fig:dashboard}
+\end{figure}
+
+The React-based Environmental Monitoring Dashboard is shown in
+Fig.~\ref{fig:dashboard}. The dashboard was developed and tested in the
+laboratory for real-time monitoring of environmental conditions. During the
+laboratory test, the device measured a temperature of 22.2~$^\circ$C and a
+relative humidity of 55.1\%. The gas-level reading was 70/1024, indicating
+a low sensor response, while the light-level reading was 374/1024,
+representing a moderate level of surrounding light. The soil-moisture
+measurement was 500/1024, representing an intermediate moisture level.
+These measurements demonstrate the ability of the proposed device to
+capture, process, and display multiple environmental parameters in
+real time.
+
+\subsection{Report Generation and Statistical Analysis}
+
+The report-generation feature was successfully implemented and tested under
+laboratory conditions. Users can specify a date range to generate a report
+containing statistical summaries of the monitored environmental parameters.
+As shown in Fig.~\ref{fig:report}, the report interface provides the
+observation count, mean, median, standard deviation, maximum, and minimum
+values for each parameter.
+
+The recorded temperature had a mean of 22.89~$^\circ$C, with values ranging
+from 19.70~$^\circ$C to 26.30~$^\circ$C. Humidity had a mean of 49.82\%,
+with values ranging from 38.50\% to 60.50\%. The gas-level readings had a
+mean of 77.68, ranging from 61 to 94, whereas the light-intensity readings
+had a mean of 533.73, ranging from 373 to 900. The soil-moisture value
+remained at 500 throughout the recorded period, resulting in a standard
+deviation of 0.00 and indicating no variation in the recorded soil-moisture
+measurements.
+
+The generated report also incorporates analytical visualizations to provide
+a comprehensive representation of the collected sensor data. The
+correlation matrix is presented in Fig.~\ref{fig:correlation}. The complete
+generated report, including the statistical summary and graphical
+representations, is presented in Fig.~\ref{fig:appendix_report}.
+These results demonstrate the capability of the reporting module to convert
+the collected laboratory sensor data into a structured and interpretable
+report for further analysis and evaluation.
+
+% -------------------------------------------------
+% Figure 6
+% -------------------------------------------------
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\columnwidth]{fig6.png}
+    \caption{Report-generation interface of the proposed EMD, enabling
+    selection of a specific date range and generation of a statistical
+    report containing observation count, mean, median, standard deviation,
+    minimum, and maximum values for the monitored environmental parameters,
+    with an option to export the results as a PDF.}
+    \label{fig:report}
+\end{figure}
+
+\subsection{Correlation Analysis}
+
+The correlation matrix was used to identify the linear relationships among
+the monitored environmental parameters. Pearson correlation coefficients
+ranging from $-1$ to $+1$ were calculated, where values closer to
+$\pm1$ indicate stronger linear relationships and values close to zero
+indicate weaker relationships.
+
+As shown in Fig.~\ref{fig:correlation}, temperature and humidity exhibit a
+strong negative correlation of $-0.89$, indicating that humidity generally
+decreased as temperature increased within the recorded laboratory data.
+Similarly, temperature and light intensity show a strong positive
+correlation of $+0.85$, indicating that higher light levels were generally
+associated with higher temperatures. A strong negative correlation of
+$-0.87$ was also observed between humidity and light intensity, indicating
+an inverse relationship between these parameters.
+
+In comparison, gas level and soil moisture show relatively weak
+correlations with the other monitored parameters, indicating limited linear
+association within the recorded laboratory dataset. Overall, the strongest
+relationships were observed among temperature, humidity, and light
+intensity, whereas gas level and soil moisture exhibited comparatively
+weaker linear associations.
+
+% -------------------------------------------------
+% Figure 7
+% -------------------------------------------------
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\columnwidth]{fig7.png}
+    \caption{Correlation matrix of the monitored environmental parameters,
+    showing strong negative correlation between temperature and humidity
+    ($-0.89$), strong positive correlation between temperature and light
+    intensity ($+0.85$), and strong negative correlation between humidity
+    and light intensity ($-0.87$).}
+    \label{fig:correlation}
+\end{figure}
+
+\subsection{Exported Monitoring Report}
+
+The exported environmental monitoring report, shown in
+Fig.~\ref{fig:appendix_report}, contains statistical summaries, parameter
+ranges, and correlation analysis for the selected monitoring period. The
+combination of these analytical features within a single report provides a
+structured representation of the recorded environmental measurements and
+supports subsequent analysis and evaluation.
+
+As presented in Fig.~\ref{fig:appendix_report}, the exported report covers
+the monitoring period of 9--12 January 2026 and summarizes the recorded
+sensor statistics, parameter ranges, and correlation relationships, providing
+an overall view of the monitored environmental conditions and their
+interactions during the selected period.
+
+% -------------------------------------------------
+% Figure 8: Exported monitoring report
+% -------------------------------------------------
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=0.60\textwidth]{figA1.1.png}
+        \caption{Exported environmental monitoring report for 9--12 January 2026,
+    summarizing the recorded sensor statistics, parameter ranges, and
+    correlation relationships during the selected monitoring period.}
+    \label{fig:appendix_report}
+\end{figure*}
+
+% -------------------------------------------------
+% Additional Results: CD4051/ADC Testing and Alerts
+% -------------------------------------------------
+
+\subsection{CD4051 and ADC Testing}
+
+No channel-to-channel bleeding or crosstalk was observed while recording the
+collected analog channels. Sequential S0/S1/S2 control signals and the applied
+settling delays were sufficient to provide reliable multi-channel recording.
+
+\subsection{Alert Configuration and Anomaly Monitoring}
+
+The Alert section was developed with the capability to configure thresholds
+for all five measured parameters: temperature, humidity, light intensity,
+soil moisture, and gas level. The configured threshold values are stored in
+the browser to ensure persistence across working sessions.
+
+In addition to threshold monitoring, the Alert page provides users with a list
+of anomalies detected during the previous 24~h using the Isolation Forest
+anomaly-detection model. Each anomaly entry contains its timestamp and the
+corresponding sensor-reading value, enabling users to identify the environmental
+conditions associated with abnormal observations and to remain informed about
+the outputs of the machine-learning-based detection model. The alert
+configuration interface, threshold configuration, and detected-anomaly
+display are presented in Fig.~\ref{fig:appendix_alerts}, where threshold
+limits can be defined for temperature, humidity, light intensity, soil
+moisture, and gas level. These user-defined limits enable the system to
+identify parameter values outside the acceptable range and support timely
+detection of abnormal environmental conditions.
+
+% -------------------------------------------------
+% Figure 9: Alert configuration interface
+% -------------------------------------------------
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=\textwidth]{figA2.png}
+    \caption{Alert configuration interface of the proposed EMD, providing
+    user-defined threshold settings for temperature, humidity, light
+    intensity, soil moisture, and gas level to support detection of abnormal
+    environmental conditions.}
+    \label{fig:appendix_alerts}
+\end{figure*}
+
+\subsection{Overall System Performance}
+
+The Environmental Monitoring Device (EMD) successfully demonstrated reliable
+data acquisition through the combined CD4051--ESP8266 interface, enabling the
+collection of measurements from multiple sensor channels. In addition to the
+data-acquisition capability, the EMD integrates backend data processing and
+API-based communication, allowing the collected measurements to be transferred
+and stored for subsequent use.
+
+The integration of machine-learning methods further extends the analytical
+capabilities of the EMD by enabling the development and evaluation of models
+using the data collected during system operation. The corresponding
+analytical outputs obtained from the recorded measurements are presented in
+Figs.~\ref{fig:appendix_ml1}--\ref{fig:appendix_ml3}.
+
+\subsection{Time-Series Observations of the Monitored Parameters}
+
+Figure~\ref{fig:appendix_ml1} presents the time-series variation of gas level
+during the monitoring period. The recorded gas-level measurements exhibit
+short-term fluctuations around the observed operating range, providing a
+temporal representation of gas-level variations in the monitored environment.
+
+% -------------------------------------------------
+% Figure 10: Gas-level time series
+% -------------------------------------------------
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=\textwidth]{figA3.jpg}
+    \caption{Time-series variation of gas level during the monitoring period,
+    showing the recorded gas-level measurements over time.}
+    \label{fig:appendix_ml1}
+\end{figure*}
+
+The corresponding temperature and humidity observations are shown in
+Fig.~\ref{fig:appendix_ml2}. The two parameters follow an inverse trend over
+the recorded observations, which is consistent with the strong negative
+correlation of $-0.89$ reported in Fig.~\ref{fig:correlation}.
+
+% -------------------------------------------------
+% Figure 11: Temperature and humidity time series
+% -------------------------------------------------
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=\textwidth]{figA4.jpg}
+    \caption{Time-series variation of temperature and humidity during the
+    monitoring period, showing their inverse trend over the recorded
+    environmental observations.}
+    \label{fig:appendix_ml2}
+\end{figure*}
+
+Figure~\ref{fig:appendix_ml3} presents the light-level (LDR) and
+soil-moisture analog readings recorded during the five-day laboratory
+deployment. Both analog channels were multiplexed through the CD4051 and
+acquired using the single ADC channel of the ESP8266, confirming that the
+multiplexed acquisition scheme described in
+Fig.~\ref{fig:communication} provides continuous and consistent recording of
+the analog parameters.
+
+% -------------------------------------------------
+% Figure 12: Light and soil-moisture time series
+% -------------------------------------------------
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=\textwidth,height=6.8cm]{figA5.jpg}
+    \caption{Light level (LDR) and soil-moisture analog readings over the
+    five-day laboratory deployment. Both channels were multiplexed through
+    the CD4051 and acquired using the single ADC channel of the ESP8266.}
+    \label{fig:appendix_ml3}
+\end{figure*}
+
+\subsection{24-h Environmental Forecasting}
+
+Figure~\ref{fig:predictions} presents the ``All Parameters--Predictions''
+view of the dashboard, showing the predicted values of the five environmental
+parameters over the subsequent 24~h from the time of data capture. The
+horizontal axis represents the prediction time, while the vertical axis
+represents normalized measurements in the range of 0--100, allowing the
+different parameters to be compared within a common scale. The dashboard
+also displays the predicted mean, minimum, and maximum values for each
+parameter.
+
+\begin{itemize}
+    \item \textbf{Temperature:} A decreasing tendency is observed over the
+    24-h prediction period, with the normalized measurement decreasing from
+    approximately 100 to 0. The predicted temperature ranges from about
+    16.7 to 21.6~$^\circ$C, with an average value of approximately
+    19.1~$^\circ$C.
+
+    \item \textbf{Humidity:} An increasing trend is observed, with the
+    normalized measurement increasing from approximately 0 to 100. The
+    predicted relative humidity ranges from about 53.6\% to 67.4\% RH,
+    with an average value of approximately 60.5\%.
+
+    \item \textbf{Gas:} The gas level remains relatively constant throughout
+    the 24-h prediction period, with normalized fluctuations occurring
+    approximately within the range of 50--60. The predicted gas level varies
+    only slightly, with a minimum of approximately 77.0 and a maximum of
+    approximately 77.6.
+
+    \item \textbf{Light:} The light parameter exhibits a general downward
+    trend over the 24-h period, which is consistent with the observed
+    relationship between light intensity and temperature. The predicted
+    light values range from approximately 314 to 532, with a mean value of
+    approximately 423.
+
+    \item \textbf{Soil moisture:} The normalized soil-moisture measurement
+    exhibits an increasing trend similar to that of humidity. The reported
+    statistics indicate a mean, minimum, and maximum value of approximately
+    500. Therefore, the appropriateness of the original-unit representation
+    should be considered when interpreting the soil-moisture prediction.
+\end{itemize}
+
+Overall, the 24-h predictions indicate a transition toward a cooler and more
+humid environmental condition. Temperature and light intensity are predicted
+to decrease, whereas humidity and soil moisture increase. The gas level
+remains nearly constant, indicating relatively stable gas conditions during
+the prediction period.
+
+% -------------------------------------------------
+% Figure 8
+% -------------------------------------------------
+
+\begin{figure}[!t]
+    \centering
+    \includegraphics[width=\columnwidth]{fig8.png}
+    \caption{Twenty-four-hour predictions of temperature, humidity, gas level,
+    light intensity, and soil moisture generated by the proposed EMD
+    forecasting system.}
+    \label{fig:predictions}
+\end{figure}
+
+% -------------------------------------------------
+% Measurement Accuracy Validation
+% -------------------------------------------------
+
+\subsection{Measurement Accuracy Validation}
+
+In order to confirm the overall measurement accuracy of the proposed
+monitoring system, the sensor readings of the monitoring system were compared
+with those from existing laboratory hardware that acts as the reference.
+A total of 100 measurements were randomly selected and conducted manually
+from the reference device at a certain point in time while the recorded
+observations were obtained simultaneously by the proposed EMD. The date,
+time, readings of the instruments, and corresponding readings of the developed
+system are presented in Table~\ref{tab:measurement_verification}.
+
+% -------------------------------------------------
+% Table I
+% -------------------------------------------------
+
+\begin{table*}[!t]
+    \centering
+    \caption{Representative measurements from the laboratory reference
+    equipment and the proposed EMD.}
+    \label{tab:measurement_verification}
+
+    \renewcommand{\arraystretch}{1.05}
+    \setlength{\tabcolsep}{3.2pt}
+
+    \begin{tabular}{c l cc cc cc cc cc}
+        \toprule
+        \multirow{2}{*}{No.} &
+        \multirow{2}{*}{Date \& Time} &
+        \multicolumn{2}{c}{Temperature ($^\circ$C)} &
+        \multicolumn{2}{c}{Humidity (\%)} &
+        \multicolumn{2}{c}{Gas} &
+        \multicolumn{2}{c}{Light} &
+        \multicolumn{2}{c}{Soil} \\
+        
+        \cmidrule(lr){3-4}
+        \cmidrule(lr){5-6}
+        \cmidrule(lr){7-8}
+        \cmidrule(lr){9-10}
+        \cmidrule(lr){11-12}
+        
+        &
+        &
+        Ref. & EMD &
+        Ref. & EMD &
+        Ref. & EMD &
+        Ref. & EMD &
+        Ref. & EMD \\
+        
+        \midrule
+        
+        1 & 11-Jan-2026 10:05 AM &
+        22.4 & 22.5 & 50.2 & 50.1 & 777 & 785 & 205 & 185 & 500 & 500 \\
+
+        2 & 11-Jan-2026 10:15 AM &
+        22.7 & 22.6 & 49.8 & 49.9 & 787 & 795 & 375 & 375 & 500 & 500 \\
+
+        3 & 11-Jan-2026 10:25 AM &
+        23.1 & 23.0 & 49.3 & 49.4 & 807 & 815 & 485 & 505 & 500 & 500 \\
+
+        4 & 11-Jan-2026 10:35 AM &
+        23.5 & 23.6 & 48.9 & 49.6 & 818 & 826 & 605 & 585 & 500 & 500 \\
+
+        5 & 11-Jan-2026 10:45 AM &
+        23.8 & 23.7 & 48.5 & 48.6 & 838 & 845 & 755 & 745 & 500 & 500 \\
+
+        6 & 11-Jan-2026 11:00 AM &
+        24.1 & 24.0 & 47.9 & 48.0 & 858 & 865 & 590 & 592 & 499 & 500 \\
+
+        7 & 11-Jan-2026 11:15 AM &
+        24.3 & 24.4 & 47.5 & 47.6 & 878 & 885 & 605 & 603 & 499 & 500 \\
+
+        8 & 11-Jan-2026 11:30 AM &
+        24.0 & 24.1 & 47.8 & 47.7 & 848 & 855 & 590 & 591 & 498 & 500 \\
+
+        9 & 12-Jan-2026 11:00 AM &
+        23.2 & 23.3 & 49.1 & 49.0 & 797 & 805 & 405 & 425 & 498 & 500 \\
+
+        10 & 12-Jan-2026 11:30 AM &
+        22.8 & 22.7 & 50.0 & 50.1 & 767 & 775 & 510 & 509 & 500 & 500 \\
+
+        \bottomrule
+    \end{tabular}
+\end{table*}
+
+Table~\ref{tab:measurement_verification} presents 10 representative
+observations out of the 100 observations used for verification. Ref. denotes
+readings from the laboratory reference equipment, while EMD denotes readings
+recorded by the proposed Environmental Monitoring Device.
+
+The readings from both systems were matched and compared according to the
+different measured parameters. The results showed that the temperature
+values recorded by the EMD were approximately 0.1--0.2~$^\circ$C lower than
+those obtained from the reference equipment. Humidity values differed by
+approximately 0.1--0.7\%. Gas readings differed by approximately 7--8 units,
+whereas light readings showed differences ranging from 0--20 units depending
+on the measured intensity. Soil-moisture readings exhibited very small
+deviations of 0--2 units, with several observations showing identical values.
+
+The verification results showed a 94\% overall agreement between the proposed
+system and the reference measurements across the evaluated observations.
+The agreement was calculated as the ratio of the number of measurements
+satisfying the predefined acceptance criterion to the total number of
+evaluated observations, expressed as
+
+\begin{equation}
+    \mathrm{Agreement}~(\%) =
+    \frac{N_{\mathrm{agreement}}}
+    {N_{\mathrm{total}}}
+    \times 100
+    =
+    \frac{94}{100}\times100
+    =94\%.
+    \label{eq:agreement}
+\end{equation}
+
+where $N_{\mathrm{agreement}}$ represents the number of measurements in
+agreement with the reference equipment and $N_{\mathrm{total}}$ represents
+the total number of evaluated observations.
+
+The close correspondence between the measurements and their time-series
+trends provides experimental evidence for the reliability of the proposed
+sensing and acquisition system. The comparison was further evaluated using
+corresponding time-series plots to examine the agreement and consistency
+between the proposed EMD and the laboratory reference measurements.
+
+\begin{table*}[!h]
+    \centering
+    \caption{Comparative analysis of the proposed system with other recent
+    works in IoT environmental monitoring and machine learning for sensor data.}
+    \label{tab:comparative_analysis}
+
+    \scriptsize
+    \renewcommand{\arraystretch}{1.15}
+    \setlength{\tabcolsep}{3.5pt}
+
+    \begin{tabular}{c c p{4.0cm} c c c c c c c}
+        \toprule
+        \textbf{Year} &
+        \textbf{Ref.} &
+        \textbf{Contribution} &
+        \multicolumn{6}{c}{\textbf{Scope}} \\
+
+        \cmidrule(lr){4-9}
+
+        & &
+        &
+        \textbf{IoT env.} &
+        \textbf{ADC/ Mux} &
+        \textbf{Cloud/ back.} &
+        \textbf{ML pred.} &
+        \textbf{Anom. det.} &
+        \textbf{Lab data} \\
+
+        \midrule
+
+        2019 & [1] &
+        Low-cost IoT, MQTT, cloud air quality &
+        $\checkmark$ & $\times$ & $\checkmark$ &
+        $\times$ & $\times$ & $\times$ \\
+
+        2021 & [2] &
+        NodeMCU climate, Firebase; offline limits &
+        $\checkmark$ & $\times$ & $\checkmark$ &
+        $\times$ & $\times$ & $\times$ \\
+
+        2022 & [7] &
+        ESP8266 environmental data acquisition &
+        $\checkmark$ & $\times$ & $\checkmark$ &
+        $\times$ & $\times$ & $\times$ \\
+
+        2023 & [8] &
+        Gas detection, MQ sensors, ESP8266 &
+        $\checkmark$ & $\times$ & $\checkmark$ &
+        $\times$ & $\times$ & $\times$ \\
+
+        2018 & [10] &
+        Zigbee WSN environmental monitoring &
+        $\checkmark$ & $\times$ & $\checkmark$ &
+        $\times$ & $\times$ & $\times$ \\
+
+        2020 & [11] &
+        LoRaWAN scalable environmental monitoring &
+        $\checkmark$ & $\times$ & $\checkmark$ &
+        $\times$ & $\times$ & $\times$ \\
+
+        2022 & [3] &
+        ML anomaly detection in IoT data &
+        $\checkmark$ & $\times$ & $\checkmark$ &
+        $\checkmark$ & $\checkmark$ & $\times$ \\
+
+        2022 & [21] &
+        Modular sensor fusion; no CD4051 detail &
+        $\checkmark$ & $\times$ & $\checkmark$ &
+        $\times$ & $\times$ & $\times$ \\
+
+        -- & \textbf{Proposed} &
+        CD4051--ESP8266, 5 parameters, Flask/React,
+        LSTM + Isolation Forest, lab data only &
+        $\checkmark$ & $\checkmark$ & $\checkmark$ &
+        $\checkmark$ & $\checkmark$ & $\checkmark$ \\
+
+        \bottomrule
+    \end{tabular}
+\end{table*}
+
+Table~\ref{tab:comparative_analysis} presents a comparison highlighting the
+major differences between existing approaches in environmental monitoring
+and the proposed system. Most of the reviewed studies have emphasized
+IoT-based environmental monitoring or cloud integration, while some have
+also incorporated machine-learning methods. The comparison indicates that
+the combination of ADC/multiplexer-based acquisition, multi-parameter
+monitoring, machine-learning-based prediction, anomaly detection, and
+laboratory evaluation is less commonly represented within the compared
+works.
+% =================================================
+% IV. DISCUSSION
+% =================================================
+
+\section{Discussion}
+
+The proposed environmental monitoring system demonstrates the feasibility of
+integrating multi-parameter sensing, wireless communication, data management,
+visualization, and machine learning on a resource-constrained IoT platform.
+Wireless sensor networks have previously demonstrated their effectiveness for
+environmental monitoring applications~\cite{ref13}, while low-cost sensing
+platforms have established the practicality of affordable environmental data
+acquisition~\cite{ref14}. Low-cost sensing has also been investigated for
+air-quality and exposure monitoring~\cite{ref15}. Edge-based IoT architectures
+have further demonstrated the suitability of resource-constrained devices for
+environmental monitoring~\cite{ref16}. Cloud-connected wireless sensor networks
+provide an effective mechanism for transmitting and managing environmental
+observations~\cite{ref17}. IoT-based smart-farming systems have shown the value
+of continuous monitoring of environmental and agricultural parameters~\cite{ref18},
+while irrigation monitoring systems demonstrate the application of
+multi-parameter sensing in agricultural environments~\cite{ref19}.
+
+The proposed system extends these approaches by combining temperature,
+humidity, gas, light, and soil-moisture sensing within a single monitoring
+node. Multi-sensor architectures have previously been applied to water-quality
+monitoring using heterogeneous sensing modalities~\cite{ref20}. Systematic
+studies of IoT-based environmental monitoring further highlight the importance
+of integrating multiple sensing parameters within connected monitoring
+architectures~\cite{ref21}. AI-based environmental monitoring has also
+demonstrated the potential for combining real-time sensing with predictive
+analytics~\cite{ref22}. In the present work, the CD4051 analog multiplexer
+addresses the ADC limitation of the ESP8266 by allowing multiple analog
+sensors to share a single ADC input. This hardware approach enables
+heterogeneous sensors to be integrated without requiring a controller with
+multiple ADC channels.
+
+The backend architecture provides the connection between the sensing node and
+user-level monitoring. Edge and IoT architectures have demonstrated the
+importance of scalable processing for real-time monitoring applications~\cite{ref23}.
+REST-based and cloud-oriented architectures provide mechanisms for collecting,
+storing, and managing sensor observations~\cite{ref24}. The proposed
+implementation follows this general approach using Flask for backend
+communication, database storage for recorded measurements, and a React-based
+dashboard for visualization. The resulting architecture allows measurements
+to be acquired from the monitoring node, transmitted to the backend, stored,
+and subsequently accessed for analysis~\cite{ref25}. Interactive visualization
+further supports both real-time observation and retrospective analysis of
+environmental measurements~\cite{ref26}. However, because the proposed system
+was evaluated in a controlled laboratory environment, its performance should
+not be interpreted as validation for direct agricultural or industrial
+deployment.
+
+Machine learning adds predictive and analytical capability beyond conventional
+visualization. LSTM networks have been widely established for time-series
+prediction because they can capture temporal dependencies within sequential
+observations~\cite{ref27}. Previous environmental forecasting studies have
+applied LSTM models to predict temperature and humidity variations~\cite{ref28}.
+Hybrid machine-learning approaches have also been investigated for
+environmental prediction and proactive climate management~\cite{ref29}. In
+the proposed system, LSTM is used to forecast environmental parameters from
+the recorded sensor measurements.
+
+Anomaly detection provides a complementary function by identifying observations
+that deviate from normal environmental patterns. Isolation Forest is an
+established unsupervised method for detecting anomalous observations~\cite{ref30}.
+Its application to environmental monitoring has demonstrated its suitability
+for identifying unusual patterns in environmental datasets~\cite{ref31}.
+Improved Isolation Forest approaches have also been investigated for anomaly
+detection in wireless sensor networks~\cite{ref32}. Other IoT studies have
+demonstrated the application of anomaly detection for identifying abnormal
+system behavior and improving monitoring reliability~\cite{ref33}. More
+recent work has combined unsupervised learning with IoT monitoring to
+characterize operational states in laboratory environments~\cite{ref34}. In
+this study, Isolation Forest is integrated with the LSTM forecasting pipeline
+so that prediction and anomaly identification are performed within the same
+monitoring framework rather than as independent post-processing tasks.
+
+Using the information obtained from the implemented monitoring system makes
+it possible to evaluate the machine-learning pipeline using recorded
+measurements. However, evidence collected over five days in the laboratory
+was limited by the variability of the environment and thus restricts the
+generalizability of the models to different locations, seasons, and modes of
+operation. Therefore, long-term data are necessary for further validation of
+the models. Future work should investigate the integration of additional
+sensors and monitoring nodes to further evaluate the effectiveness of the
+multiplexed acquisition system.
+
+% -------------------------------------------------
+% Table II: Comparative Analysis
+% -------------------------------------------------
+
+
+
+In Table~\ref{tab:comparative_analysis}, a check mark represents a feature or
+scope considered by a study, whereas a cross mark represents a feature not
+identified in the compared work. The proposed framework incorporates
+hardware-efficient data acquisition using a CD4051 multiplexer with an
+ESP8266, monitoring of five environmental parameters, cloud/backend support,
+LSTM-based prediction, Isolation Forest-based anomaly detection, and
+laboratory data evaluation. Thus, the comparison demonstrates the broader
+integrated scope of the proposed framework across sensing, communication,
+data management, predictive analytics, anomaly detection, and experimental
+evaluation.
+
+% =================================================
+% ABBREVIATIONS
+% =================================================
+
+
+%\clearpage
+
+% =================================================
+% V. CONCLUSION
+% =================================================
+
+\section{Conclusion}
+
+The proposed Environmental Monitoring Device (EMD) represents a unified
+solution for multi-parameter environmental monitoring while addressing the
+limited availability of ADC channels in affordable IoT platforms. The
+combination of the CD4051 analog multiplexer and the ESP8266 enables the
+acquisition of environmental parameters, including temperature, humidity,
+gas concentration, incident light intensity, and soil moisture, through a
+single ADC channel. The system integrates a sensing unit with wireless
+communication, a Flask-based backend, cloud data storage, a React-based
+visualization interface, LSTM-based forecasting, and Isolation Forest-based
+anomaly detection, thereby providing an integrated framework for environmental
+data collection and analysis.
+
+The system was modelled and tested for five consecutive days with a sampling
+interval of 10~s. The experimental results demonstrated reliable operation
+without noticeable channel-to-channel interference during multiplexed
+acquisition. The machine-learning pipeline provided anomaly-detection
+performance of approximately 92\% and enabled forecasting of the monitored
+environmental parameters.
+
+A key feature of the proposed system is the integration of hardware-efficient
+measurement techniques with software-based data analysis within a single
+platform. The availability of laboratory-measured data establishes a direct
+link between the physical measurement system and subsequent analytical
+evaluation. Nevertheless, the analysis is based on a five-day laboratory
+dataset, which limits the generalizability of the findings across different
+geographical locations, seasons, and longer-term environmental conditions.
+Therefore, further evaluation using longer-duration measurements and diverse
+environmental datasets is required.
+
+Future investigations will focus on improving the forecasting and anomaly
+detection capabilities of the proposed system and evaluating its scalability
+across multiple monitoring locations. Lightweight transformer architectures,
+including Temporal Fusion Transformer variants, may be investigated for
+long-term forecasting. Hybrid approaches combining Isolation Forest with
+sequence-based algorithms may also be explored to improve anomaly detection.
+In addition, federated and adaptive online learning methods could be considered
+to improve model adaptability across distributed EMD nodes.
+
+% =================================================
+% REFERENCES
+% =================================================
+
+%\clearpage
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

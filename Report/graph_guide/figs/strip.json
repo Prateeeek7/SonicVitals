@@ -1,0 +1,10 @@
+{
+ "CARDIAC PEAK (f0)": "1.04 Hz (62.5 BPM)",
+ "SNR (DE HAAN)": "-3.9 dB",
+ "SPECTRAL CONCENTRATION (Q)": "33.2%",
+ "RESPIRATION (fr)": "-- Hz (-- BrPM)",
+ "METHODS AGREEING | MOTION": "2/2 | 14% REPAIRED",
+ "VIDEO SOURCE (MEASURED FPS)": "Recorded webcam clip (replayed)",
+ "accepted": false,
+ "rr_estimate": 17.4
+}
