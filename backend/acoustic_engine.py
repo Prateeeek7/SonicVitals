@@ -95,32 +95,36 @@ class AcousticEngine:
         # Merge new beats, ignoring any within 0.2 s of a beat already stored. Beats in
         # the first/last 0.5 s of the window are skipped: filtering and truncated sounds
         # bias their timing, and the overlapping next window finds them in its interior.
-        new = est['beats']
-        new = new[(new >= t0 + 0.5) & (new <= t_last - 0.5)]
-        if len(self.beats):
-            new = np.array([b for b in new if np.min(np.abs(self.beats - b)) > 0.2])
-        beats = np.sort(np.concatenate([self.beats, new])) if len(new) else self.beats
-        self.beats = beats[beats >= t_last - 60.0]
-
         band_rms = float(np.std(est['x1k'])) if len(est['x1k']) else 0.0
         audible = band_rms > self.rms_floor
         rhythmic = est['rho'] >= dsp.MIN_RHO_ACOUSTIC and est['beat_consistency'] >= dsp.MIN_BEAT_CONSISTENCY
+
+        # Only windows with a heart rhythm contribute beats: loud but arrhythmic windows (handling, rubbing,
+        # speech) produce envelope peaks that are not heartbeats and would give a meaningless RMSSD.
+        new = est['beats'] if audible and rhythmic else np.array([])
+        new = new[(new >= t0 + 0.5) & (new <= t_last - 0.5)]
+        if len(self.beats) and len(new):
+            new = np.array([b for b in new if np.min(np.abs(self.beats - b)) > 0.2])
+        beats = np.sort(np.concatenate([self.beats, new])) if len(new) else self.beats
+        self.beats = beats[beats >= t_last - 60.0]
         self.result = dict(
             hr=est['hr'] if audible and rhythmic else None,
             hr_estimate=est['hr'] if audible else None,      # before the rhythm gate (low confidence)
             audible=bool(audible),
             rho=est['rho'] if audible else 0.0,
             rms=band_rms,
-            rmssd=dsp.rmssd_ms(self.beats) if audible else None,
+            rmssd=dsp.rmssd_ms(self.beats) if audible and rhythmic else None,
             beats_in_window=int(len(self.beats)),
             beat_consistency=round(est['beat_consistency'], 2),
         )
         return self.result
 
     # ------------------------------------------------------------ display
-    def display_payload(self, seconds=4.0, n_points=600, n_cols=60, f_max=2000.0):
-        """Band-passed PCG trace (min/max decimated) and a dB spectrogram for the UI."""
-        x, _ = self.recent(seconds)
+    def display_payload(self, seconds=4.0, n_points=600, n_cols=60, f_max=2000.0, x=None):
+        """Band-passed PCG trace (min/max decimated) and a dB spectrogram for the UI (of the last
+        `seconds` of microphone audio, or of `x` if given: the labelled demo pattern)."""
+        if x is None:
+            x, _ = self.recent(seconds)
         payload = dict(connected=self.connected(), wave=[], wave_seconds=seconds,
                        spec=[], spec_freqs=[], spec_seconds=seconds,
                        blocks_received=self.blocks_received, blocks_lost=self.blocks_lost)

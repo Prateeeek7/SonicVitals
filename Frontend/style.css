@@ -1845,3 +1845,93 @@ body {
 /* Current estimate that has not passed every quality check: shown, but marked */
 .card-value.low-conf { color: var(--warm-amber); font-size: 0.85em; }
 .card-timestamp.low-conf { color: var(--warm-amber); font-weight: 600; }
+
+/* ---- Readout cards: one large value and one status badge (no small notice text) ---- */
+.vital-card {
+    height: auto;
+    min-height: 104px;
+    gap: 6px;
+    cursor: help;
+}
+.vital-card .card-title { font-size: 11px; letter-spacing: 0.6px; }
+.vital-card .card-value { font-size: 34px; line-height: 1; font-variant-numeric: tabular-nums; }
+.vital-card .card-value.card-value-text { font-size: 18px; line-height: 1.2; }
+.vital-card .card-unit { font-size: 12px; font-weight: 600; }
+.card-badge {
+    align-self: flex-start;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    line-height: 1;
+    padding: 5px 8px;
+    border-radius: 3px;
+    border: 1px solid transparent;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: break-word;
+    line-height: 1.25;
+}
+.vital-card { min-width: 0; }
+.card-badge.badge-ok { background: rgba(15, 106, 74, 0.12); color: var(--emerald-green); border-color: rgba(15, 106, 74, 0.35); }
+.card-badge.badge-warn { background: rgba(217, 140, 0, 0.14); color: #9A6300; border-color: rgba(217, 140, 0, 0.45); }
+.card-badge.badge-flag { background: var(--terracotta); color: #fff; border-color: var(--terracotta); }
+.card-badge.badge-idle { background: var(--section-color); color: var(--text-muted); border-color: var(--border-color); }
+.card-badge.badge-flag::before { content: "\26A0  "; }
+.vital-card.card-flagged { border-left-color: var(--terracotta); background-color: rgba(184, 84, 48, 0.06); }
+.vital-card .card-value.value-warn { color: #9A6300; }
+.vital-card .card-value.value-held { color: var(--text-muted); }
+/* cards never narrower than 150 px, so a value and its badge always fit on whole words */
+.vitals-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+@media (max-width: 1000px) {
+    .instrument-row-top { flex-direction: column; }
+    .instrument-row-top > .instrument-panel { width: 100%; max-width: none; }
+}
+
+/* Method table: which rows the heart-rate card averages */
+.avg-tag { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; padding: 2px 6px; margin-right: 6px; border-radius: 3px; }
+.avg-tag.in { background: rgba(15, 106, 74, 0.12); color: var(--emerald-green); }
+.avg-tag.out { background: rgba(184, 84, 48, 0.12); color: var(--terracotta); }
+.methods-table tr.outlier td { color: var(--text-muted); }
+.methods-table tr.outlier td.hr-cell { text-decoration: line-through; }
+
+/* ---- Labelled demo mode: everything simulated is purple and says SIMULATED ---- */
+.demo-toggle {
+    font-family: monospace; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
+    padding: 5px 9px; margin-right: 10px; border: 1px solid var(--border-color);
+    background: var(--section-color); color: var(--text-muted); cursor: pointer; border-radius: 3px;
+}
+.demo-toggle.on { background: #6A3FB5; color: #fff; border-color: #6A3FB5; }
+.demo-banner {
+    background: #6A3FB5; color: #fff; font-size: 13px; font-weight: 700; letter-spacing: 0.3px;
+    text-align: center; padding: 7px 16px;
+}
+.card-badge.badge-sim { background: #6A3FB5; color: #fff; border-color: #6A3FB5; }
+.vital-card .card-value.value-sim { color: #6A3FB5; }
+.mic-dot-sim { background-color: #6A3FB5 !important; }
+
+/* ---- Face insights panel ---- */
+.insights-panel { margin-top: 20px; }
+.insights-grid { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 16px; align-items: start; }
+.insights-cards { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.perfusion-box { display: flex; flex-direction: column; gap: 6px; }
+.perfusion-title { font-size: 11px; font-weight: 700; letter-spacing: 0.6px; color: var(--text-muted); }
+.perfusion-frame { position: relative; width: 100%; aspect-ratio: 1 / 1; background: #161816; border: 1px solid var(--border-color); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.perfusion-frame img { width: 100%; height: 100%; object-fit: contain; }
+.perfusion-empty { color: #9A9A90; font-size: 12px; font-family: monospace; text-align: center; padding: 12px; }
+.perfusion-legend { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--text-muted); font-family: monospace; }
+.perfusion-bar { flex: 1; height: 8px; background: linear-gradient(90deg, #000004, #57106e, #bc3754, #f98e09, #fcffa4); border: 1px solid var(--border-color); }
+.perfusion-regions { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 12px; }
+.perfusion-regions .rname { color: var(--text-muted); }
+.perfusion-regions .rval { font-family: 'IBM Plex Mono', monospace; font-weight: 700; text-align: right; }
+@media (max-width: 760px) { .insights-grid { grid-template-columns: minmax(0, 1fr); } }
+.perfusion-box { max-width: 320px; width: 100%; justify-self: center; }
+.capture-map-btn { width: 100%; }
+.capture-map-btn.recording { background: var(--warm-amber); border-color: var(--warm-amber); }
+.capture-status { font-size: 12px; line-height: 1.35; color: var(--text-color); min-height: 32px; }
+.capture-status.flag { color: var(--terracotta); font-weight: 600; }
+.insights-live { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-top: 12px; }
+.insights-live-plot { height: 190px; background: var(--bg-color); border: 1px solid var(--border-color); }
+/* live graphs sit under the cards, next to the blood-flow map */
+.insights-right { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.insights-right .insights-live { margin-top: 0; }
+.insights-right .insights-live-plot { height: 240px; }

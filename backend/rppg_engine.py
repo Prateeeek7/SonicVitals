@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 import vitals_dsp as dsp
+from face_insights import FaceInsights, last_movement_end
 
 # Diagnostic snapshot status codes (kept for the UI's CSS classes):
 #   NORMAL = inside the software reference range, WARN = borderline, ALERT = outside.
@@ -20,6 +21,7 @@ RANGE_LABEL = {'NORMAL': 'IN RANGE', 'WARN': 'BORDERLINE', 'ALERT': 'OUT OF RANG
 PRIOR_TTL_S = 15.0        # an accepted HR guides peak tracking for this long
 NODE_RGB_TTL_S = 2.0      # node raw-pixel samples count as active if one arrived this recently
 GATE_HOLD_S = 4.0         # node samples are accepted while the last face-gate result is this recent
+DETECT_EVERY = 3           # face detection every 3rd frame (10 Hz at 30 fps); the tracker follows in between
 DETECT_MAX_W = 320        # face detection runs on a copy at most this wide (speed; the gate needs faces >= 20 % of width)
 FACE_DEADBAND = 0.06      # detections within 6 % of the face size are treated as box jitter
 TRACK_MAX_MISSES = 8       # consecutive unreliable tracker frames before the boxes re-lock
@@ -30,8 +32,13 @@ ROI_RELOCK = 0.05         # skin regions stay fixed until the face moves by more
 
 class RPPGEngine:
     def __init__(self, fs=dsp.FS_OPT, warmup_s=dsp.MIN_SEG_HR_S, buffer_s=30.0,
-                 update_interval_s=0.5, spo2_calibration=None):
+                 update_interval_s=0.5, spo2_calibration=None, face_mesh=False):
         self.fs = fs
+        # perfusion map, liveness, blink rate, head steadiness (face_insights.py); the face mesh (blinks) is
+        # loaded only for the live server (face_mesh=True)
+        self.insights = FaceInsights(use_mesh=face_mesh)
+        self.display_hr = None        # heart rate on the dashboard card (set by the server), for the perfusion map
+        self.breathing = dict(pattern='UNKNOWN', reason='no clear breathing signal')
         self.warmup_s = warmup_s
         self.buffer_s = buffer_s
         self.update_interval_s = update_interval_s
@@ -48,13 +55,23 @@ class RPPGEngine:
         self.async_estimate = False   # True in the live server: estimation runs off the camera thread
         self._estimating = False
         self.tracked = (None, 0.0)    # (HR, confidence) from the ensemble tracker
+        self.estimate_seq = 0         # +1 per finished estimate, so consumers count each one once
         self.ensemble_n = 0
         self.camera_rmssd = None
+        self.camera_hrv = {}
         # Background (wall beside / above the face) mean RGB, for rejecting lighting flicker
         self.bg_t = []
+        self.motion_t = []            # vertical head position (fraction of face height), a breathing source
+        self.motion_y = []
+        self.motion_x = []            # horizontal position (fraction of face width), for head steadiness
+        self._motion_lock = None
+        self._motion_offset = 0.0
+        self._motion_offset_x = 0.0
         self.bg_rgb = []
 
         self.frame_count = 0
+        self._last_faces = []
+        self._last_sharpness = 0.0
         self.patient_detected = False
         self.last_face_time = None
         self.last_face_rect = None
@@ -312,12 +329,15 @@ class RPPGEngine:
 
     # ------------------------------------------------------------ per frame
     def reset(self):
+        self.insights.reset()
+        self.breathing = dict(pattern='UNKNOWN', reason='no clear breathing signal')
         self.t_hist.clear()
         self.rgb_hist.clear()
         self.patch_hist.clear()
         self.tracker.reset()
         self.tracked = (None, 0.0)
         self.camera_rmssd = None
+        self.camera_hrv = {}
         self.patient_detected = False
         self.last_face_rect = None
         self.locked_rect = None
@@ -325,22 +345,73 @@ class RPPGEngine:
         self.optical = dsp.estimate_optical([], np.empty((0, 3)))
         self.status = 'NO_PATIENT'
 
-    def _estimate(self, t, t_hist, rgb_hist, patches, bg_t, bg_rgb, prior_hr, face):
+    def _estimate(self, t, t_hist, rgb_hist, patches, bg_t, bg_rgb, prior_hr, face, motion_t=None, motion_y=None,
+                  motion_x=None):
         """Optical estimate + ensemble tracker on a snapshot of the buffers (may run in a thread)."""
         try:
+            still_from = last_movement_end(motion_t, motion_x, motion_y) if motion_t and motion_x else None
             optical = dsp.estimate_optical(t_hist, rgb_hist, fs=self.fs, spo2_calibration=self.spo2_calibration,
-                                           prior_hr=prior_hr, bg_t=bg_t, bg_rgb=bg_rgb)
+                                           prior_hr=prior_hr, bg_t=bg_t, bg_rgb=bg_rgb,
+                                           motion_t=motion_t, motion_y=motion_y, rr_still_from=still_from)
+            self.still_from = still_from
             if patches is None:
                 patches = rgb_hist.reshape(-1, 1, 3)
             spec, n, _ = dsp.ensemble_spectrum(t_hist, patches, fs=self.fs, bg_t=bg_t, bg_rgb=bg_rgb)
             tracked = self.tracker.update(spec, t) if face else (None, 0.0)
-            rmssd = dsp.camera_rmssd(optical['bvp'], self.fs, tracked[0]) \
-                if tracked[0] is not None and tracked[1] >= dsp.TRACKER_HIGH_CONF else None
+            hrv = dsp.camera_hrv(t_hist, rgb_hist, tracked[0] if tracked[0] is not None else optical['hr'],
+                                 snr_db=optical['snr'])
+            rmssd = hrv['rmssd'] if hrv['ok'] else None
+            self.camera_hrv = hrv
+            self.breathing = dsp.breathing_pattern(optical.get('rr_wave'), optical.get('rr_wave_fs', self.fs))
+            if optical.get('rr_reason'):
+                self.breathing['reason'] = optical['rr_reason']
+            self.breathing['source'] = optical.get('rr_wave_src')
+            map_hr = self.display_hr or (tracked[0] if tracked[0] is not None else optical['hr'])
+            self.insights.update(map_hr if face else None,
+                                 (motion_t, motion_x, motion_y) if motion_t and motion_x else None, still_from)
             self.optical, self.ensemble_n, self.tracked, self.camera_rmssd = optical, n, tracked, rmssd
+            self.estimate_seq += 1
             if optical['hr_ok'] and self._segment_alive(t):
                 self.prior_hr, self.prior_t, self.last_ok_t = optical['hr'], t, t
         finally:
             self._estimating = False
+
+    def _record_motion(self, t, y, locked, x=0.0):
+        """Vertical head position in face heights; a re-lock moves the reference, so the series is
+        offset to stay continuous across it."""
+        if self.motion_t and t <= self.motion_t[-1]:
+            return
+        if locked != self._motion_lock and self.motion_y:
+            self._motion_offset = self.motion_y[-1] - y      # continue from the last value after a re-lock
+            self._motion_offset_x = self.motion_x[-1] - x
+        self._motion_lock = locked
+        self.motion_t.append(t)
+        self.motion_y.append(y + self._motion_offset)
+        self.motion_x.append(x + getattr(self, '_motion_offset_x', 0.0))
+        while self.motion_t and self.motion_t[-1] - self.motion_t[0] > self.buffer_s + 2.0:
+            self.motion_t.pop(0)
+            self.motion_y.pop(0)
+            self.motion_x.pop(0)
+
+    def live_traces(self, window_s=30.0):
+        """Real-time traces for the dashboard: eye openness with blinks (last 20 s) and the breathing movement of
+        the head (last window_s, vertical position band-passed to 0.1-0.7 Hz, in % of the face height)."""
+        now = self.insights.frame_t[-1] if self.insights.frame_t else 0.0
+        out = self.insights.live_traces(now)
+        t, y = np.array(self.motion_t[-int(40 * 30):]), np.array(self.motion_y[-int(40 * 30):])
+        if len(t) > 60 and t[-1] - t[0] > 8.0:
+            fs = 15.0
+            tu = np.arange(t[0], t[-1], 1.0 / fs)
+            yu = np.interp(tu, t, y)
+            sos = dsp.butter(2, [0.1 / (fs / 2), 0.7 / (fs / 2)], btype='band', output='sos')
+            yb = 100.0 * dsp.sosfiltfilt(sos, yu - yu.mean(), padlen=min(len(yu) - 1, 3 * 5))
+            m = tu >= now - window_s
+            pk, _ = dsp.find_peaks(-yb[m], distance=int(1.5 * fs), prominence=max(0.05, 0.5 * np.std(yb[m])))
+            out.update(breath_t=np.round(tu[m] - now, 2).tolist(), breath=np.round(-yb[m], 3).tolist(),
+                       breaths=np.round(tu[m][pk] - now, 2).tolist())
+        else:
+            out.update(breath_t=[], breath=[], breaths=[])
+        return out
 
     def _clear_buffer(self):
         self.t_hist.clear()
@@ -348,6 +419,9 @@ class RPPGEngine:
         self.patch_hist.clear()
         self.bg_t.clear()
         self.bg_rgb.clear()
+        self.motion_t.clear()
+        self.motion_y.clear()
+        self.motion_x.clear()
 
     def _record_background(self, bgr_img, face, t):
         """Mean RGB of the regions left / right of the face and above the head (no skin)."""
@@ -424,12 +498,18 @@ class RPPGEngine:
         t = now if t is None else float(t)
         self.frame_count += 1
         self.latest_raw_frame = bgr_img
+        self.insights.note_frame(t)
         h, w = bgr_img.shape[:2]
 
         gray = cv2.cvtColor(bgr_img, cv2.COLOR_BGR2GRAY)
-        gray_eq = cv2.equalizeHist(gray)
-        faces = self._detect_faces(gray_eq)
-        sharpness = float(cv2.Laplacian(gray_eq, cv2.CV_64F).var())
+        # Face detection (the costliest step) runs every DETECT_EVERY frames while a face is found; the
+        # phase-correlation tracker follows the face in between. Without a face it runs on every frame.
+        if self.frame_count % DETECT_EVERY == 0 or len(self._last_faces) == 0:
+            gray_eq = cv2.equalizeHist(gray)
+            self._last_faces = self._detect_faces(gray_eq)
+            self._last_sharpness = float(cv2.Laplacian(gray_eq, cv2.CV_64F).var())
+        faces = self._last_faces
+        sharpness = self._last_sharpness
         annotated = bgr_img.copy()
         record = {'t': t, 'face_found': len(faces) > 0, 'gated': False, 'rgb': None}
 
@@ -444,7 +524,8 @@ class RPPGEngine:
             self.patient_detected = True
             self.last_face_time = t
 
-            self._record_background(bgr_img, (sfx, sfy, sfw, sfh), t)
+            if self.frame_count % 2 == 0:              # 15 Hz at 30 fps: the analysis runs at 15 Hz
+                self._record_background(bgr_img, (sfx, sfy, sfw, sfh), t)
             # Motion compensation: shift of the face since the boxes were locked (sub-pixel phase
             # correlation). Re-locking is judged against the compensated position, so detector jitter
             # does not move the boxes; the boxes are sampled at the shifted position below.
@@ -461,6 +542,11 @@ class RPPGEngine:
                 self._set_template(gray, locked)
                 dx, dy = 0.0, 0.0
             rois = self.rppg_rois(*locked, w, h)
+            if is_full and locked[3] > 0:
+                self._record_motion(t, (locked[1] + dy + 0.5 * locked[3]) / float(locked[3]), locked,
+                                    (locked[0] + dx + 0.5 * locked[2]) / float(locked[2]))
+            self.insights.mesh_async = self.async_estimate    # live server: landmarks on their own thread
+            self.insights.add_frame(bgr_img, t, (sfx, sfy, sfw, sfh), locked, (dx, dy), is_full)
             shifted = [(int(round(x + dx)), int(round(y + dy)), bw, bh) for x, y, bw, bh in rois]
             self.current_rois = shifted if is_full else None
             self.last_gate_t, self.last_gate_ok = t, is_full
@@ -496,14 +582,16 @@ class RPPGEngine:
                 self.reset()
             cv2.drawMarker(annotated, (w // 2, h // 2), (0, 140, 255), cv2.MARKER_CROSS, 20, 1)
 
-        if now - self._last_update >= self.update_interval_s and not self._estimating:
-            self._last_update = now
+        # timed by the frame clock (identical live; replays of recordings then get the same 2 s updates)
+        if (t - self._last_update >= self.update_interval_s or t < self._last_update) and not self._estimating:
+            self._last_update = t
             if self.prior_t is not None and t - self.prior_t > PRIOR_TTL_S:
                 self.prior_hr = None
             shapes = {p.shape for p in self.patch_hist}
             snap = (t, np.array(self.t_hist), np.array(self.rgb_hist).reshape(-1, 3),
                     np.stack(self.patch_hist) if len(shapes) == 1 and self.patch_hist else None,
-                    list(self.bg_t), list(self.bg_rgb), self.prior_hr, self.patient_detected)
+                    list(self.bg_t), list(self.bg_rgb), self.prior_hr, self.patient_detected,
+                    list(self.motion_t), list(self.motion_y), list(self.motion_x))
             if self.async_estimate:            # live server: never make the camera thread wait
                 self._estimating = True
                 threading.Thread(target=self._estimate, args=snap, daemon=True).start()
@@ -590,6 +678,9 @@ class RPPGEngine:
             'cardiac_snr': None if o['snr'] is None or np.isnan(o['snr']) else round(o['snr'], 1),
             'optical_rr': None if o['rr'] is None else round(o['rr'], 1),
             'optical_rr_estimate': None if o.get('rr_estimate') is None else round(o['rr_estimate'], 1),
+            'rr_sources': o.get('rr_sources', {}),
+            'rr_reason': o.get('rr_reason'),
+            'rr_agree': o.get('rr_agree', 0),
             'rr_quality': round(o.get('rr_quality', 0.0), 3),
             'spo2_ratio': None if o['spo2_ratio'] is None else round(o['spo2_ratio'], 4),
             'spo2_estimate': None if o['spo2'] is None else round(o['spo2'], 1),
@@ -606,11 +697,15 @@ class RPPGEngine:
             # quality-control evidence behind hr_ok (shown on the dashboard)
             'snr_gate_db': dsp.MIN_SNR_HR_DB,
             'optical_method': o.get('method', 'chrom').upper(),
+            'estimate_seq': self.estimate_seq,
             'tracked_hr': None if self.tracked[0] is None else round(self.tracked[0], 1),
             'tracked_conf': round(float(self.tracked[1]), 3),
             'tracked_high_conf': dsp.TRACKER_HIGH_CONF,
             'ensemble_spectra': int(self.ensemble_n),
             'camera_rmssd': None if self.camera_rmssd is None else round(self.camera_rmssd, 1),
+            'camera_hrv': self.camera_hrv,
+            'insights': dict(self.insights.telemetry(self.insights.frame_t[-1] if self.insights.frame_t else 0.0),
+                             breathing=self.breathing),
             'optical_hr_chrom': None if o.get('hr_chrom') is None else round(o['hr_chrom'], 1),
             'bg_rejected_bpm': list(o.get('bg_rejected', [])),
             'optical_hr_pos': None if o.get('hr_pos') is None else round(o['hr_pos'], 1),

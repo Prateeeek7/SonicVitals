@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css?v=19">
+    <link rel="stylesheet" href="style.css?v=29">
     <!-- Plotly.js for high-precision scientific physiological waveforms -->
     <script src="https://cdn.plot.ly/plotly-2.25.2.min.js"></script>
 </head>
@@ -28,6 +28,7 @@
             </nav>
         </div>
         <div class="nav-right">
+            <button class="demo-toggle" id="demo-toggle" title="Labelled demo mode: shows a simulated normal heart-sound pattern and typical SpO2 / HRV values, each marked SIMULATED, while the real microphone has no heart rhythm. Camera heart rate stays real.">DEMO: OFF</button>
             <div class="connection-status" id="connection-indicator">
                 <span class="dot"></span>
                 <span class="status-text" id="status-text">CONNECTING TO HOST...</span>
@@ -35,6 +36,8 @@
             <div class="profile">SENSE Researcher | VIT</div>
         </div>
     </header>
+
+    <div class="demo-banner" id="demo-banner" hidden>DEMO MODE: values and graphs marked SIMULATED are not measurements. Camera heart rate and breathing rate are real.</div>
 
     <!-- Main Content Area -->
     <main class="workspace">
@@ -92,7 +95,7 @@
                 <div class="instrument-panel metrics-panel">
                     <div class="panel-header">
                         <h2>PHYSIOLOGICAL READOUT PANELS</h2>
-                        <div class="panel-meta">DISPLAY UPDATE: 2.0 s (EMA SMOOTHED)</div>
+                        <div class="panel-meta">UPDATES EVERY 2 s | HOVER A CARD FOR DETAILS</div>
                     </div>
                     
                     <!-- Vitals Status Boxes -->
@@ -103,23 +106,23 @@
                                 <span class="card-value" id="val-hr">--</span>
                                 <span class="card-unit">BPM</span>
                             </div>
-                            <span class="card-timestamp" id="ts-hr">TS: --:--:--</span>
+                            <span class="card-badge badge-idle" id="ts-hr">NO SIGNAL</span>
                         </div>
                         <div class="vital-card border-green" id="card-rr">
-                            <span class="card-title">RESPIRATORY RATE</span>
+                            <span class="card-title">BREATHING RATE</span>
                             <div class="card-val-row">
                                 <span class="card-value" id="val-rr">--</span>
-                                <span class="card-unit">Br/Min</span>
+                                <span class="card-unit">br/min</span>
                             </div>
-                            <span class="card-timestamp" id="ts-rr">TS: --:--:--</span>
+                            <span class="card-badge badge-idle" id="ts-rr">NO SIGNAL</span>
                         </div>
                         <div class="vital-card border-green" id="card-hrv">
-                            <span class="card-title">HRV (RMSSD, PCG)</span>
+                            <span class="card-title">HRV (RMSSD)</span>
                             <div class="card-val-row">
                                 <span class="card-value" id="val-hrv">--</span>
                                 <span class="card-unit">ms</span>
                             </div>
-                            <span class="card-timestamp" id="ts-hrv">TS: --:--:--</span>
+                            <span class="card-badge badge-idle" id="ts-hrv">NO SIGNAL</span>
                         </div>
                         <div class="vital-card border-green" id="card-quality">
                             <span class="card-title">SIGNAL QUALITY</span>
@@ -127,22 +130,14 @@
                                 <span class="card-value" id="val-quality">--</span>
                                 <span class="card-unit">%</span>
                             </div>
-                            <span class="card-timestamp" id="ts-quality">TS: --:--:--</span>
+                            <span class="card-badge badge-idle" id="ts-quality">NO SIGNAL</span>
                         </div>
                         <div class="vital-card border-green" id="card-source">
                             <span class="card-title">HR SOURCE</span>
                             <div class="card-val-row">
-                                <span class="card-value card-value-small" id="val-source">--</span>
+                                <span class="card-value card-value-text" id="val-source">--</span>
                             </div>
-                            <span class="card-timestamp" id="ts-source">OPT -- | PCG --</span>
-                        </div>
-                        <div class="vital-card border-amber" id="card-spo2">
-                            <span class="card-title">SpO&#8322; (EXPLORATORY)</span>
-                            <div class="card-val-row">
-                                <span class="card-value" id="val-spo2">--</span>
-                                <span class="card-unit">%</span>
-                            </div>
-                            <span class="card-timestamp" id="ts-spo2">UNCALIBRATED</span>
+                            <span class="card-badge badge-idle" id="ts-source">NO SIGNAL</span>
                         </div>
                     </div>
 
@@ -156,6 +151,72 @@
                             </span>
                         </div>
                         <div id="audio-plot" style="width:100%; flex: 1; min-height: 140px;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Face insights: same camera video as the pulse (face_insights.py) -->
+            <div class="instrument-panel insights-panel">
+                <div class="panel-header">
+                    <h2>FACE INSIGHTS (SAME CAMERA)</h2>
+                    <div class="panel-meta" id="insights-meta">UPDATES EVERY 2 s | HOVER A CARD FOR DETAILS</div>
+                </div>
+                <div class="insights-grid">
+                    <div class="perfusion-box">
+                        <div class="perfusion-title">BLOOD-FLOW (PERFUSION) MAP</div>
+                        <button class="btn-action capture-map-btn" id="capture-map-btn">CAPTURE BLOOD-FLOW MAP (30 s)</button>
+                        <div class="capture-status" id="capture-status">Press capture and hold still for 30 s.</div>
+                        <div class="perfusion-frame">
+                            <img id="perfusion-img" alt="Perfusion map" hidden>
+                            <div class="perfusion-empty" id="perfusion-empty">No capture yet</div>
+                        </div>
+                        <div class="perfusion-legend"><span>weak</span><span class="perfusion-bar"></span><span>strong pulse</span></div>
+                        <div class="perfusion-regions" id="perfusion-regions"></div>
+                    </div>
+                    <div class="insights-right">
+                    <div class="vitals-grid insights-cards">
+                        <div class="vital-card border-green" id="card-live">
+                            <span class="card-title">LIVENESS</span>
+                            <div class="card-val-row">
+                                <span class="card-value card-value-text" id="val-live">--</span>
+                            </div>
+                            <span class="card-badge badge-idle" id="ts-live">WAITING</span>
+                        </div>
+                        <div class="vital-card border-green" id="card-pi">
+                            <span class="card-title">PERFUSION INDEX</span>
+                            <div class="card-val-row">
+                                <span class="card-value" id="val-pi">--</span>
+                                <span class="card-unit">%</span>
+                            </div>
+                            <span class="card-badge badge-idle" id="ts-pi">WAITING</span>
+                        </div>
+                        <div class="vital-card border-green" id="card-bpat">
+                            <span class="card-title">BREATHING PATTERN</span>
+                            <div class="card-val-row">
+                                <span class="card-value card-value-text" id="val-bpat">--</span>
+                            </div>
+                            <span class="card-badge badge-idle" id="ts-bpat">WAITING</span>
+                        </div>
+                        <div class="vital-card border-green" id="card-blink">
+                            <span class="card-title">BLINK RATE</span>
+                            <div class="card-val-row">
+                                <span class="card-value" id="val-blink">--</span>
+                                <span class="card-unit">/min</span>
+                            </div>
+                            <span class="card-badge badge-idle" id="ts-blink">WAITING</span>
+                        </div>
+                        <div class="vital-card border-green" id="card-head">
+                            <span class="card-title">HEAD STEADINESS</span>
+                            <div class="card-val-row">
+                                <span class="card-value card-value-text" id="val-head">--</span>
+                            </div>
+                            <span class="card-badge badge-idle" id="ts-head">WAITING</span>
+                        </div>
+                    </div>
+                    <div class="insights-live">
+                        <div id="ear-plot" class="insights-live-plot"></div>
+                        <div id="breath-plot" class="insights-live-plot"></div>
+                    </div>
                     </div>
                 </div>
             </div>
@@ -746,6 +807,6 @@
 
     </main>
 
-    <script src="app.js?v=26"></script>
+    <script src="app.js?v=38"></script>
 </body>
 </html>

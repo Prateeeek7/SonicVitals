@@ -657,3 +657,374 @@ def test_camera_exposure_wave_is_cancelled_by_background_regression():
     trk = dsp.HRTracker()
     spec = dsp.ensemble_spectrum(t, skin[:, None, :], bg_t=t, bg_rgb=wall)[0]
     assert trk.update(spec, 30.0)[0] == pytest.approx(75.0, abs=2.0)
+
+
+# ---------------------------------------------------------------- dashboard card stabilizer
+def _feed(stab, readings, tier='accepted', t0=0.0, dt=2.0):
+    out = []
+    for k, r in enumerate(readings):
+        out.append(stab.update(r, tier, t0 + k * dt))
+    return out
+
+
+def test_stabilizer_acquires_and_stays_steady():
+    from display_stabilizer import DisplayStabilizer
+    s = DisplayStabilizer(jump=8.0)
+    rng = np.random.default_rng(0)
+    snaps = _feed(s, list(72 + rng.normal(0, 1.5, 40)))
+    assert snaps[0]['state'] == 'ACQUIRING' and snaps[0]['value'] is None
+    vals = [x['value'] for x in snaps if x['value'] is not None]
+    assert abs(vals[-1] - 72) < 2
+    assert max(abs(np.diff(vals))) <= 0.3 * 8.0 + 1e-9        # moves at most alpha * jump per update
+    assert snaps[-1]['state'] == 'STABLE' and snaps[-1]['level'] == 'ok'
+
+
+def test_stabilizer_holds_and_flags_a_spike():
+    from display_stabilizer import DisplayStabilizer
+    s = DisplayStabilizer(jump=8.0)
+    _feed(s, [72] * 6)
+    spike = s.update(98, 'accepted', 12.0)
+    assert spike['value'] == pytest.approx(72, abs=0.5)      # value not moved by the jump
+    assert spike['state'] == 'RAPID_CHANGE' and spike['level'] == 'flag'
+    back = _feed(s, [72] * 3, t0=14.0)
+    assert back[-1]['state'] == 'STABLE' and back[-1]['value'] == pytest.approx(72, abs=0.5)
+
+
+def test_stabilizer_confirms_a_sustained_change():
+    from display_stabilizer import DisplayStabilizer
+    s = DisplayStabilizer(jump=8.0, confirm_n=4)
+    _feed(s, [72] * 6)
+    snaps = _feed(s, [91, 90, 92, 91], t0=12.0)
+    assert all(x['value'] == pytest.approx(72, abs=0.5) for x in snaps[:3])   # held while unconfirmed
+    assert snaps[-1]['state'] == 'CHANGED' and snaps[-1]['value'] == pytest.approx(91, abs=1)
+
+
+def test_stabilizer_flags_scatter_and_expires():
+    from display_stabilizer import DisplayStabilizer
+    s = DisplayStabilizer(jump=8.0, hold_s=15.0)
+    _feed(s, [72] * 6)
+    snaps = _feed(s, [100, 55, 120, 50, 110, 58, 125, 52, 115, 60], t0=12.0)
+    assert snaps[2]['state'] == 'UNSTABLE' and snaps[2]['value'] == pytest.approx(72, abs=0.5)
+    assert snaps[-1]['value'] is None and snaps[-1]['state'] in ('UNSTABLE', 'ACQUIRING')
+
+
+def test_stabilizer_holds_then_drops_without_readings():
+    from display_stabilizer import DisplayStabilizer
+    s = DisplayStabilizer(jump=8.0, hold_s=15.0)
+    _feed(s, [72] * 6)
+    snaps = _feed(s, [None] * 10, t0=12.0)
+    assert snaps[0]['state'] == 'HOLDING' and snaps[0]['value'] == pytest.approx(72, abs=0.5)
+    assert snaps[-1]['state'] == 'NO_SIGNAL' and snaps[-1]['value'] is None
+
+
+def test_stabilizer_badge_does_not_flicker_between_tiers():
+    from display_stabilizer import DisplayStabilizer
+    s = DisplayStabilizer(jump=8.0, dwell_s=4.0)
+    _feed(s, [72] * 6)
+    states = [s.update(72, 'accepted' if k % 2 else 'tracked_low', 12.0 + k)['state'] for k in range(12)]
+    changes = sum(a != b for a, b in zip(states, states[1:]))
+    assert changes <= 3                                       # 1 s updates, 4 s minimum dwell
+
+
+def test_stabilizer_weak_readings_cannot_confirm_a_jump():
+    """Tracker drift (68 -> 50, below the quality gate) is held and flagged, then withdrawn."""
+    from display_stabilizer import DisplayStabilizer
+    s = DisplayStabilizer(jump=8.0, hold_s=15.0)
+    first = _feed(s, [68] * 5, tier='tracked_high')
+    assert first[-1]['state'] == 'LOW_CONFIDENCE' and first[-1]['level'] == 'warn'   # never green without the gate
+    snaps = _feed(s, [50] * 12, tier='tracked_high', t0=10.0)
+    assert all(x['state'] == 'RAPID_CHANGE' and x['value'] == pytest.approx(68, abs=0.5) for x in snaps[:6])
+    assert any(x['value'] is None and x['state'] == 'UNSTABLE' for x in snaps)       # withdrawn, flagged
+    back = _feed(s, [50] * 6, tier='tracked_high', t0=40.0)
+    assert back[-1]['value'] == pytest.approx(50, abs=0.5) and back[-1]['state'] == 'LOW_CONFIDENCE'
+
+
+def test_stabilizer_flags_disputed_readings():
+    from display_stabilizer import DisplayStabilizer
+    s = DisplayStabilizer(jump=8.0, hold_s=15.0)
+    _feed(s, [80] * 4, tier='tracked_low')
+    x = s.update(54, 'tracked_low', 10.0, dispute='other methods agree on 84')
+    assert x['state'] == 'DISAGREE' and x['level'] == 'flag' and x['value'] == pytest.approx(80, abs=0.5)
+    # back in agreement: the flag clears at once
+    y = s.update(81, 'accepted', 12.0)
+    assert y['state'] != 'DISAGREE' and y['value'] == pytest.approx(80.3, abs=0.5)
+
+
+def test_stabilizer_keeps_flag_when_disputed_value_expires():
+    from display_stabilizer import DisplayStabilizer
+    s = DisplayStabilizer(jump=8.0, hold_s=15.0)
+    _feed(s, [80] * 4, tier='tracked_low')
+    snaps = [s.update(47, 'tracked_low', 10.0 + 2 * k, dispute='others agree on 80') for k in range(12)]
+    assert snaps[-1]['value'] is None and snaps[-1]['state'] == 'DISAGREE' and snaps[-1]['level'] == 'flag'
+
+
+def test_consensus_averages_agreeing_methods_and_drops_outliers():
+    from display_stabilizer import robust_consensus
+    c = robust_consensus([('SonicVitals', 77.5), ('CHROM', 77.5), ('POS', 77.8), ('GREEN', 52.9),
+                          ('TS-CAN', 80.9), ('PhysNet', 80.9), ('EfficientPhys', 80.9), ('Microphone', None)])
+    assert c['n'] == 7 and c['agree'] == 6 and c['excluded'] == ['GREEN']
+    assert c['value'] == pytest.approx(np.mean([77.5, 77.5, 77.8, 80.9, 80.9, 80.9]), abs=0.05)
+    assert c['tier'] == 'consensus_strong'
+
+
+def test_consensus_refuses_a_split_vote():
+    from display_stabilizer import robust_consensus
+    c = robust_consensus([('a', 47), ('b', 47.5), ('c', 48), ('d', 80), ('e', 81), ('f', 79)])
+    assert c['tier'] is None                                   # two camps: no value, card flags it
+    weak = robust_consensus([('a', 70), ('b', 72), ('c', 71), ('d', 95), ('e', 50)])
+    assert weak['tier'] == 'consensus_weak' and weak['agree'] == 3
+
+
+def test_no_hrv_from_handling_noise():
+    """Loud irregular clicks (mic being handled) must not produce beats or an RMSSD."""
+    rng = np.random.default_rng(5)
+    fs = 16000
+    x = 30 * rng.standard_normal(64 * fs)
+    for c in rng.uniform(0, 63.9, 120):
+        i = int(c * fs)
+        x[i:i + 800] += 3000 * np.sin(2 * np.pi * 80 * np.arange(800) / fs) * np.hanning(800)
+    eng = AcousticEngine()
+    for seq, i in enumerate(range(0, len(x) - 255, 256)):
+        eng.add_block(seq, int(i / fs * 1e6), x[i:i + 256])
+        if seq % 62 == 61:
+            res = eng.update(force=True)
+            assert res['rmssd'] is None
+    assert eng.update(force=True)['rmssd'] is None
+
+
+# ---------------------------------------------------------------- labelled demo mode
+def test_demo_pattern_reads_as_normal_heart_sounds():
+    """The simulated pattern is a regular S1/S2 rhythm at the requested rate (what a working chest mic shows)."""
+    from demo_sim import heart_sound_pattern
+    for hr in (60.0, 78.0, 95.0):
+        x = heart_sound_pattern(hr, 10.0, 4000, t_end=1000.0)
+        e = dsp.estimate_acoustic(x.astype(float), fs=4000)
+        assert e['hr'] == pytest.approx(hr, abs=3.0)
+        assert e['rho'] >= dsp.MIN_RHO_ACOUSTIC
+
+
+def test_demo_mode_off_by_default_and_values_in_normal_range():
+    from demo_sim import DemoMode, SPO2_RANGE, RMSSD_RANGE_MS
+    d = DemoMode(seed=1)
+    assert d.enabled is False
+    d.set(True)
+    for k in range(200):
+        v = d.values(now=2.0 * k)
+        assert SPO2_RANGE[0] <= v['spo2'] <= SPO2_RANGE[1]
+        assert RMSSD_RANGE_MS[0] <= v['hrv'] <= RMSSD_RANGE_MS[1]
+
+
+# ---------------------------------------------------------------- breathing rate (multi-source fusion)
+def _breathing_face(rng, br, hr=75.0, dur=30.0, breathing=True, drift=0.0015):
+    """Webcam-like skin RGB (22-30 fps) with random-walk drift (1-2 % over 30 s, as measured live) and the
+    three respiratory modulations of the pulse (intensity 0.3 %, amplitude 20 %, sinus arrhythmia +-4 BPM),
+    plus vertical head motion (0.4 % of the face height)."""
+    t = np.cumsum(rng.uniform(1 / 30, 1 / 22, int(dur * 30)))
+    t = t[t < dur]
+    resp = np.sin(2 * np.pi * br / 60 * t + rng.uniform(0, 6)) if breathing else np.zeros_like(t)
+    pulse_phase = 2 * np.pi * np.cumsum(np.r_[0, np.diff(t)] * (hr + 4 * resp) / 60)
+    pulse = 0.003 * (1 + 0.2 * resp) * np.sin(pulse_phase)
+    base = 1 + np.cumsum(rng.normal(0, drift, len(t))) + 0.003 * resp
+    rgb = np.outer(base, [170.0, 120.0, 95.0]) * (1 - np.outer(pulse, [0.33, 0.77, 0.53]))
+    rgb += 0.08 * rng.standard_normal(rgb.shape)
+    my = 0.004 * resp + np.cumsum(rng.normal(0, 0.0003, len(t))) + 0.001 * rng.standard_normal(len(t))
+    return t, rgb, my
+
+
+def test_rr_tracks_known_rates_under_drift():
+    rng = np.random.default_rng(3)
+    for br in (12.0, 18.0, 24.0):
+        hits = 0
+        for _ in range(10):
+            t, rgb, my = _breathing_face(rng, br)
+            rr = dsp.estimate_optical(t, rgb, motion_t=t, motion_y=my)['rr']
+            hits += rr is not None and abs(rr - br) <= 1.5
+        assert hits >= 8, (br, hits)
+
+
+def test_rr_not_pulled_below_ten_by_drift():
+    """The old single-peak method piled up at the 9 breaths/min band edge under drift."""
+    rng = np.random.default_rng(4)
+    for _ in range(10):
+        t, rgb, my = _breathing_face(rng, 18.0)
+        o = dsp.estimate_optical(t, rgb, motion_t=t, motion_y=my)
+        assert o['rr_estimate'] is not None and o['rr_estimate'] > 14.0
+
+
+def test_rr_no_rate_without_breathing():
+    rng = np.random.default_rng(5)
+    reported = sum(dsp.estimate_optical(*_breathing_face(rng, 15.0, breathing=False)[:2])['rr'] is not None
+                   for _ in range(30))
+    assert reported <= 1
+
+
+# ---------------------------------------------------------------- camera HRV
+def _pulse_video(rng, ibis, fps=30.0, noise=0.0004):
+    """Skin RGB at ~fps with a pulse whose beats follow the given inter-beat intervals."""
+    beats = np.concatenate([[0.5], 0.5 + np.cumsum(ibis)])
+    t = np.cumsum(rng.uniform(0.9 / fps, 1.1 / fps, int((beats[-1] + 1) * fps)))
+    t = t[t < beats[-1] + 0.5]
+    k = np.clip(np.searchsorted(beats, t) - 1, 0, len(beats) - 2)
+    phase = (t - beats[k]) / (beats[k + 1] - beats[k])                   # 0..1 within each beat
+    pulse = 0.004 * (np.exp(-((phase - 0.15) / 0.08) ** 2) + 0.4 * np.exp(-((phase - 0.45) / 0.1) ** 2))
+    base = 1 + np.cumsum(rng.normal(0, 0.0003, len(t)))
+    rgb = np.outer(base, [170.0, 120.0, 95.0]) * (1 - np.outer(pulse, [0.33, 0.77, 0.53]))
+    return t, rgb + noise * 120 * rng.standard_normal(rgb.shape)
+
+
+def test_camera_hrv_matches_true_rmssd():
+    rng = np.random.default_rng(12)
+    n = 40
+    ibis = 0.8 + 0.04 * np.sin(2 * np.pi * np.arange(n) / 5) + 0.01 * rng.standard_normal(n)   # RSA-like
+    true_rmssd = 1000 * np.sqrt(np.mean(np.diff(ibis) ** 2))
+    t, rgb = _pulse_video(rng, ibis, noise=0.0001)
+    out = dsp.camera_hrv(t, rgb, 75.0, snr_db=dsp.estimate_optical(t, rgb)['snr'])
+    assert out['ok'], out['reason']
+    assert out['rmssd'] == pytest.approx(true_rmssd, rel=0.25)
+    assert out['median_hr'] == pytest.approx(75.0, abs=3.0)
+
+
+def test_camera_hrv_refuses_slow_video():
+    rng = np.random.default_rng(13)
+    t, rgb = _pulse_video(rng, np.full(40, 0.8), fps=10.0)
+    out = dsp.camera_hrv(t, rgb, 75.0, snr_db=5.0)
+    assert not out['ok'] and 'fps' in out['reason']
+
+
+def test_camera_hrv_refuses_weak_pulse():
+    """At typical live SNR (-2 dB and below) beat timing is noise: no HRV is reported."""
+    rng = np.random.default_rng(14)
+    t, rgb = _pulse_video(rng, np.full(40, 0.8), noise=0.002)
+    snr = dsp.estimate_optical(t, rgb)['snr']
+    out = dsp.camera_hrv(t, rgb, 75.0, snr_db=snr)
+    assert snr < dsp.HRV_MIN_SNR_DB and not out['ok'] and 'weak' in out['reason']
+
+
+# ---------------------------------------------------------------- face insights (perfusion map, liveness, blinks, head, breathing pattern)
+def _face_video(amp, seconds=22.0, fps=30.0, seed=0, hr=75.0):
+    """The test face at ~fps; amp = relative skin pulse (0: a still photo with sensor noise)."""
+    from rppg_engine import RPPGEngine
+    base = face_frames().astype(float)
+    skin = skin_mask(base)
+    rng = np.random.default_rng(seed)
+    eng = RPPGEngine(update_interval_s=2.0)
+    eng.async_estimate = False
+    eng.display_hr = hr
+    t = 0.0
+    for _ in range(int(seconds * fps)):
+        t += rng.uniform(0.9 / fps, 1.1 / fps)
+        f = base * (1 - skin * amp * np.sin(2 * np.pi * hr / 60 * t) * np.array([0.53, 0.77, 0.33]))
+        eng.process_frame(np.clip(f + rng.normal(0, 1.0, f.shape), 0, 255).astype(np.uint8), t)
+    return eng.telemetry()['insights']
+
+
+def test_perfusion_map_and_liveness_on_pulsing_face():
+    ins = _face_video(0.003)
+    p = ins['perfusion']
+    assert p['ok'] and p['skin_pulse_frac'] > 0.5 and p['bg_pulse_frac'] < 0.1
+    assert p['live_hr'] == pytest.approx(75.0, abs=3.0)          # found without being told the rate
+    expected_pi = 2 * 0.003 * 0.77 * 100                          # peak-to-peak green pulse, % of DC
+    assert p['pi_median'] == pytest.approx(expected_pi, rel=0.35)
+    assert ins['liveness']['state'] == 'LIVE'
+    assert ins['head']['state'] == 'STEADY'
+
+
+def test_still_photo_is_not_live():
+    ins = _face_video(0.0)
+    assert ins['perfusion']['skin_pulse_frac'] < 0.1
+    assert ins['liveness']['state'] == 'NO_PULSE'
+
+
+def test_liveness_from_blinks_when_pulse_is_too_weak():
+    from face_insights import LivenessCheck
+    lc = LivenessCheck()
+    weak = dict(ok=True, live_skin_frac=0.08, live_bg_frac=0.05, live_coherence=0.3, live_hr=48.0)
+    assert lc.update(weak, blinks_30s=0)['state'] == 'CHECKING'   # weak pulse alone: undecided, never "photo" at once
+    assert lc.update(weak, blinks_30s=3)['state'] == 'LIVE'
+
+
+def test_blink_counter_counts_dips_once_despite_level_shifts():
+    from face_insights import BlinkCounter
+    bc = BlinkCounter()
+    fps = 30.0
+    t = np.arange(0, 40, 1 / fps)
+    ear = np.where(t < 20, 0.28, 0.22)                           # gaze change: the open level shifts
+    blinks = [2.0, 7.5, 12.0, 19.0, 24.0, 31.0, 36.5]
+    for b in blinks:
+        ear = ear - 0.2 * np.exp(-0.5 * ((t - b) / 0.04) ** 2)    # ~150 ms blinks
+    ear = ear - 0.18 * ((t > 15.0) & (t < 16.5))                  # 1.5 s eye closure: not a blink
+    ear = ear + 0.004 * np.random.default_rng(0).standard_normal(len(t))
+    for tt, e in zip(t, ear):
+        bc.add(tt, e)
+    found = bc.blinks
+    assert len(found) == len(blinks)
+    assert all(min(abs(f - b) for b in blinks) < 0.1 for f in found)
+
+
+def test_head_steadiness():
+    from face_insights import head_steadiness
+    t = np.arange(0, 10, 1 / 30)
+    rng = np.random.default_rng(1)
+    still = head_steadiness(t, 0.5 + 0.003 * rng.standard_normal(len(t)), 0.5 + 0.003 * rng.standard_normal(len(t)))
+    moving = head_steadiness(t, 0.5 + 0.08 * np.sin(2 * np.pi * 0.3 * t), 0.5 + 0.0 * t)
+    assert still['state'] == 'STEADY' and moving['state'] == 'MOVING'
+
+
+def test_breathing_pattern_regular_irregular_pause():
+    fs = 15.0
+    t = np.arange(0, 30, 1 / fs)
+    rng = np.random.default_rng(2)
+    regular = np.sin(2 * np.pi * 0.25 * t)
+    durations = rng.choice([2.0, 6.0], 20)                                # breaths randomly 2 s or 6 s (CV ~0.5)
+    edges = np.concatenate([[0.0], np.cumsum(durations)])
+    k = np.searchsorted(edges, t, side='right') - 1
+    irregular = np.sin(2 * np.pi * (k + (t - edges[k]) / durations[k]))
+    pause = regular * ((t < 10) | (t > 21))                               # 11 s breath-hold
+    noise = lambda: 0.05 * rng.standard_normal(len(t))
+    assert dsp.breathing_pattern(regular + noise(), fs)['pattern'] == 'REGULAR'
+    assert dsp.breathing_pattern(irregular + noise(), fs)['pattern'] == 'IRREGULAR'
+    out = dsp.breathing_pattern(pause + noise(), fs)
+    assert out['pattern'] == 'PAUSE' and out['pause_s'] >= 8.0
+
+
+def test_last_movement_end():
+    from face_insights import last_movement_end
+    t = np.arange(0, 30, 1 / 30)
+    rng = np.random.default_rng(3)
+    x = 0.5 + 0.002 * rng.standard_normal(len(t))
+    y = 0.5 + 0.002 * rng.standard_normal(len(t))
+    assert last_movement_end(t, x, y) == pytest.approx(0.0)              # never moved: whole window usable
+    x2 = x + 0.08 * ((t > 9.5) & (t < 10.5))                              # a 1 s head movement at 10 s
+    assert last_movement_end(t, x2, y) == pytest.approx(11.0, abs=0.6)
+
+
+def test_blood_flow_map_capture():
+    """A 30 s capture on a still pulsing face finishes with a map; the image is the captured one."""
+    from rppg_engine import RPPGEngine
+    base = face_frames().astype(float)
+    skin = skin_mask(base)
+    rng = np.random.default_rng(4)
+    eng = RPPGEngine(update_interval_s=2.0)
+    eng.async_estimate = False
+    eng.display_hr = 75.0
+    assert eng.insights.map_jpeg() is None and eng.insights.capture_status()['state'] == 'IDLE'
+    eng.insights.start_capture()
+    t = 0.0
+    for _ in range(int(36 * 30)):
+        t += rng.uniform(0.03, 0.037)
+        f = base * (1 - skin * 0.003 * np.sin(2 * np.pi * 1.25 * t) * np.array([0.53, 0.77, 0.33]))
+        eng.process_frame(np.clip(f + rng.normal(0, 1.0, f.shape), 0, 255).astype(np.uint8), t)
+    cap = eng.insights.capture_status()
+    assert cap['state'] == 'DONE', cap
+    assert cap['result']['skin_pulse_frac'] > 0.5 and eng.insights.map_jpeg() is not None
+
+
+def test_capture_restarts_when_the_head_moves():
+    from face_insights import FaceInsights
+    fi = FaceInsights(use_mesh=False)
+    fi.start_capture()
+    fi.capture.update(t0=100.0, t_last=110.0)
+    fi.frame_t.append(110.0)
+    fi._capture_step(75.0, still_from=106.0)                  # moved 6 s into the capture
+    c = fi.capture_status()
+    assert c['state'] == 'RECORDING' and 'moved' in c['message'] and c["seconds_left"] == 30.0

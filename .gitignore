@@ -43,3 +43,7 @@ Thumbs.db
 .claude/
 .vscode/
 .idea/
+
+# Node dependencies (report/deck build)
+node_modules/
+~$*

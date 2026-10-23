@@ -152,8 +152,9 @@ def build():
         ['12', 'Microphone', 'INMP441 at the node rate (16 kHz, or 4 kHz in older recordings): 25-400 Hz band-pass, Shannon-energy envelope, autocorrelation '
          'period gives PCG HR; S1 peak times give RMSSD.', 'Envelope peak rho >= 0.4, beat consistency >= 0.6.'],
         ['13', 'Fusion and display', 'Quality-weighted fusion of camera and mic when within 8 BPM, else the '
-         'higher-quality one. A new HR is shown after 3 accepted values within +-5 BPM in 12 s; median of 3, '
-         'EMA 0.2; held at most 15 s.', ''],
+         'higher-quality one. The card value is steadied by the display stabilizer (section 6.1): it holds '
+         'its value, flags jumps it cannot confirm, and cross-checks against the other methods.',
+         'Jump > 8 BPM held; hold 15 s.'],
     ], [7, 27, 92, 44]))
 
     # ------------------------------------------------------------------ 2. dashboard
@@ -166,24 +167,27 @@ def build():
                'If the boxes slide onto hair, eyebrows or background, the signal will be poor. A camera-switch icon '
                'toggles Mac webcam / ESP32 camera.', 'roi.jpg', 'Figure 2. Skin boxes on a webcam frame.', width=95)
     s.append(P('2.2 Readout cards', H3))
+    s.append(P('Each card shows one large value and one status badge (green = verified, amber = estimate, '
+               'red = flag, grey = no value). The reason behind a badge is in the card\'s tooltip (hover), '
+               'not in small text. A badge stays at least 4 s before it changes, except a red flag, which is '
+               'raised at once.'))
     s.append(table([
-        ['Card', 'Value shown', 'How it is computed / when it is empty'],
-        ['HEART RATE', 'Accepted fused HR; otherwise tracked HR (high confidence); otherwise tracked HR (low '
-         'confidence, amber); otherwise the raw camera peak (amber); otherwise mic-only estimate.',
-         'The caption states which of these is shown, plus SNR or confidence and the reason for rejection '
-         '(e.g. SNR BELOW GATE, METHODS DISAGREE 1/2, MOVEMENT).'],
-        ['RESPIRATORY RATE', 'Breaths/min from the green trace.', 'Peak of the Welch spectrum in 0.15-0.40 Hz on a '
-         '>= 15 s segment; accepted if >= 50 % of 0.05-1 Hz power lies at the peak, else shown amber.'],
-        ['HRV (RMSSD)', 'ms', 'From heart-sound (PCG) beat times when >= 20 clean intervals exist; otherwise an '
-         'exploratory camera RMSSD from pulse peaks when the track is high confidence.'],
-        ['SIGNAL QUALITY', '%', 'When accepted: 100 x max(camera weight, mic rho). Camera weight = spectral '
-         'concentration (share of in-band power within +-0.1 Hz of the peak) x gate. Otherwise the camera '
-         'concentration in amber with the SNR and gate.'],
-        ['HR SOURCE', 'FUSED / OPTICAL / ACOUSTIC / CAMERA (TRACKED)', 'Which channel produced the accepted HR; '
-         'CONFLICT when camera and mic differ by more than 8 BPM.'],
-        ['SpO2 (EXPLORATORY)', '--', 'Only the ratio-of-ratios R = (AC/DC red)/(AC/DC blue) is computed. A number '
-         'needs calibration against a finger oximeter, so none is shown.'],
-    ], [30, 52, 88]))
+        ['Card', 'Value', 'Badges and when they appear'],
+        ['HEART RATE', 'Steadied average of the agreeing methods in the comparison table (section 6.1)',
+         'N OF M METHODS AGREE | LOW CONFIDENCE | RAPID CHANGE - HELD | UNSTABLE READING | METHODS DISAGREE | '
+         'CHANGE CONFIRMED | HOLDING LAST VALUE | ACQUIRING | NO SIGNAL'],
+        ['BREATHING RATE', 'Steadied breaths/min from the green trace (0.15-0.40 Hz peak on >= 15 s)',
+         'Same badges as heart rate; a jump of more than 4 br/min is held and flagged. STABLE when >= 50 % of '
+         '0.05-1 Hz power lies at the peak, else LOW CONFIDENCE.'],
+        ['HRV (RMSSD)', 'ms', 'FROM HEART SOUNDS (>= 20 clean PCG intervals) | EXPLORATORY (camera pulse peaks, '
+         'only while the heart-rate card is STABLE) | NEEDS MIC ON CHEST | MIC OFFLINE'],
+        ['SIGNAL QUALITY', '% (spectral concentration of the pulse)', 'GOOD (estimate accepted) | FAIR (SNR '
+         'within 3 dB of the gate) | POOR (further below: red) | MEASURING | NO SIGNAL'],
+        ['HR SOURCE', 'How many methods the heart rate averages (e.g. 5 METHODS)', 'ALL INCLUDED | N LEFT OUT '
+         '(outliers; tooltip names them) | SINGLE METHOD (fewer than 3 available) | NONE'],
+        ['SpO2', '--', 'NOT CALIBRATED: only the ratio R = (AC/DC red)/(AC/DC blue) is computed; a number needs '
+         'calibration against a finger oximeter.'],
+    ], [30, 45, 95]))
     s += graph('2.3 Microphone waveform (PCG)',
                'The last 4 s of the INMP441 signal from the ESP32 node.',
                'Node audio (16 kHz; 4 kHz in older recordings), 25-400 Hz Butterworth band-pass (heart-sound band), decimated to 1 kHz, min/max '
@@ -199,9 +203,10 @@ def build():
                'Irregular amplitude or several frequencies mixed means noise or motion dominate.',
                'pulse_resp.png', 'Figure 3. Pulse and respiration traces (replayed clip).')
     s += graph('2.5 Heart-rate history (last 5 min)',
-               'Every second: the displayed HR (solid line), each camera estimate as an accepted (filled) or '
-               'rejected (hollow) point, microphone HR (diamonds) and the tracked HR (dotted: green = high '
-               'confidence, amber = low).',
+               'Every second: the value shown on the heart-rate card (solid line), red triangles where the card '
+               'raised a flag (rapid change, unstable, methods disagree), each camera estimate as an accepted '
+               '(filled) or rejected (hollow) point, microphone HR (diamonds) and the tracked HR (dotted: green = '
+               'high confidence, amber = low).',
                'Points come from the 2 s estimates (stage 9-10); the tracked line from stage 11. Hovering a '
                'rejected point shows why it was rejected.',
                'Accepted points and the green tracked line should sit on one level when you are still. Hollow points '
@@ -317,8 +322,8 @@ def build():
                'rejection).', 'methods_time.png', 'Figure 12. Extractor agreement (replayed clip).')
     s += [P('3.9 EXPORT RECORDING (CSV)', H3),
           P('Downloads the display log kept by the browser (one row per display update) with columns: '
-            '<i>time_iso, hr_display_bpm, rr_display_brpm, rmssd_ms, hr_source, hr_optical_bpm, hr_acoustic_bpm, '
-            'quality_pct, video_source</i>. Raw frames, colour traces and audio are saved separately by the '
+            '<i>time_iso, hr_card_bpm, hr_card_state, rr_card_brpm, rr_card_state, hr_accepted_bpm, '
+            'rr_accepted_brpm, rmssd_ms, hr_source, hr_optical_bpm, hr_acoustic_bpm, quality_pct, video_source</i>. Raw frames, colour traces and audio are saved separately by the '
             'host session recorder (<i>data/sessions/&lt;id&gt;/</i>: frames.csv, node_rgb.csv, estimates.csv, '
             'audio.wav).')]
 
@@ -354,18 +359,43 @@ def build():
     ], [33, 75, 62]))
 
     # ------------------------------------------------------------------ 6. methods
-    s += [PageBreak(), P('6. Modes and methods compared', H1), P('6.1 Heart-rate card modes (what the big number is)', H2)]
+    s += [PageBreak(), P('6. Modes and methods compared', H1),
+          P('6.1 Heart-rate card: how the value is kept steady and when it is flagged', H2),
+          P('A resting heart rate measured over 30 s cannot jump by 20 BPM in 2 s, but a weak camera signal can '
+            'make the estimate hop between spectral peaks. The display stabilizer (backend/display_stabilizer.py) '
+            'turns the stream of 2 s readings into one steady value and a status. <b>Each reading is the '
+            'robust average of the methods in the live comparison table</b> (SonicVitals, CHROM, POS, GREEN, '
+            'TS-CAN, PhysNet, EfficientPhys, microphone): take the median of all available values, average the '
+            'methods within 8 BPM of it (re-centred once), and leave the rest out as outliers. A plain mean is '
+            'not used because one method locked onto a wrong peak (e.g. GREEN at 53 while the others read 78-81) '
+            'would pull it by several BPM. The card and the table come from the same snapshot, and the table marks '
+            'each row IN AVERAGE or OUTLIER, LEFT OUT. A value needs at least 3 agreeing methods and at least '
+            'half of those available; it is green when at least 4 methods and 60 % agree, amber otherwise. Each '
+            'optical estimate is counted once.')]
     s.append(table([
-        ['Mode', 'Condition', 'Shown as'],
-        ['Accepted', 'Passed the full gate (SNR, 2/2 agreement, coverage, artifacts) and the display confirmation '
-         '(3 values within +-5 BPM in 12 s).', 'Black value, "ACCEPTED", SNR.'],
-        ['Tracked, high confidence', 'No accepted value, but the Bayes tracker holds >= 80 % of its probability '
-         'within +-3 BPM. On simulations pure noise never reached this level.', 'Black value, "TRACKED, HIGH '
-         'CONFIDENCE xx %".'],
-        ['Tracked, low confidence', 'Tracker has a best guess below 80 % confidence.', 'Amber value with the reason.'],
-        ['Raw camera', 'Only the single-window CHROM peak exists.', 'Amber value with the rejection reason.'],
-        ['Microphone only', 'No face; the mic has an estimate but irregular beats.', 'Amber, "MICROPHONE ONLY".'],
-    ], [33, 95, 42]))
+        ['Badge', 'Colour', 'When', 'What the value does'],
+        ['ACQUIRING', 'grey', 'No value yet; waiting for 3 readings in a row within +-5 BPM.', '--'],
+        ['N OF M METHODS AGREE', 'green / amber', 'Average of the agreeing methods, within 8 BPM of the shown '
+         'value. Green: >= 4 methods and >= 60 % agree (or the strict gate passed); amber: 3 agree.',
+         'Follows readings smoothly (EMA 0.3: at most 2.4 BPM per update).'],
+        ['LOW CONFIDENCE', 'amber', 'Fewer than 3 methods available (e.g. deep models still loading): a single '
+         'tracker or microphone estimate.', 'Same smoothing; number in amber.'],
+        ['RAPID CHANGE - HELD', 'red', 'Reading more than 8 BPM from the shown value.', 'Held (grey). Only '
+         'confident (green) readings can move it: 4 in a row agreeing within +-5 BPM.'],
+        ['CHANGE CONFIRMED', 'green', 'Those 4 confident readings agreed on a new level.', 'Switches to the '
+         'new level; badge kept 10 s.'],
+        ['UNSTABLE READING', 'red', 'Readings scatter by more than 10 BPM, or jumped readings never settled for '
+         '15 s.', 'Held, then withdrawn (--). A new value then needs 6 agreeing readings.'],
+        ['METHODS DISAGREE', 'red', 'No 3 methods (and no half of them) agree within 8 BPM, e.g. two camps at '
+         '47 and 80 BPM.', 'No new value; last value held, then withdrawn. The tooltip lists every method.'],
+        ['HOLDING LAST VALUE', 'grey', 'No reading this update (face lost, buffer refilling).', 'Kept up to 15 s, '
+         'then NO SIGNAL.'],
+    ], [33, 14, 70, 53]))
+    s += [P('Why the average of agreeing methods: on a live webcam test (21 Oct 2026, room lighting, glasses) '
+            'the tracker alone repeatedly locked onto a peak near 47 BPM while CHROM, POS and the deep models '
+            'agreed on about 78-85 BPM, so the card and the comparison table showed different numbers. With the '
+            'consensus the card showed, for example, 81 BPM with all 7 methods between 78.7 and 82.6 BPM. There '
+            'was no reference pulse in that test, so agreement between methods is not proof of accuracy.', SMALL)]
     s += [P('6.2 Methods in the live comparison', H2)]
     s.append(table([
         ['Method', 'Family', 'Input', 'Principle', 'Runs'],

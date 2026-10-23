@@ -15,6 +15,8 @@ document.addEventListener("DOMContentLoaded", () => {
     initVideoAutoRecovery();
     initCameraSwitch();
     initMethodsPanel();
+    initDemoToggle();
+    initPerfusionMap();
     writeLog("Workstation loaded. Waiting for the host engine at " + API + ".");
 });
 
@@ -134,13 +136,15 @@ function initPlotlyCharts() {
     hrLayout.margin = { l: 45, r: 15, t: 30, b: 58 };
     hrLayout.yaxis.range = [40, 150];
     Plotly.newPlot("hr-trend-plot", [
-        { x: [], y: [], name: "Displayed HR", type: "scatter", mode: "lines", line: { color: "#0F6A4A", width: 2.2 } },
+        { x: [], y: [], name: "Shown on card", type: "scatter", mode: "lines", line: { color: "#0F6A4A", width: 2.2 } },
         { x: [], y: [], name: "Camera estimate (accepted)", type: "scatter", mode: "markers", marker: { color: "#0F6A4A", size: 5 } },
         { x: [], y: [], name: "Camera estimate (rejected)", type: "scatter", mode: "markers",
           marker: { color: "rgba(0,0,0,0)", size: 5, line: { color: "#9A9A90", width: 1 } } },
         { x: [], y: [], name: "Microphone (PCG)", type: "scatter", mode: "markers", marker: { color: "#B85430", size: 5, symbol: "diamond" } },
         { x: [], y: [], name: "Tracked (high confidence)", type: "scatter", mode: "lines", line: { color: "#0F6A4A", width: 1.5, dash: "dot" } },
-        { x: [], y: [], name: "Tracked (low confidence)", type: "scatter", mode: "lines", line: { color: "#D98C00", width: 1.2, dash: "dot" } }
+        { x: [], y: [], name: "Tracked (low confidence)", type: "scatter", mode: "lines", line: { color: "#D98C00", width: 1.2, dash: "dot" } },
+        { x: [], y: [], name: "Flag: rapid change / unstable", type: "scatter", mode: "markers",
+          marker: { color: "#B85430", size: 9, symbol: "triangle-up" } }
     ], hrLayout, PLOT_CONFIG);
 
     const qLayout = layoutDefaults("Signal quality vs acceptance gate", "Pulse SNR (dB)", "Time (s)");
@@ -193,7 +197,8 @@ function recordHistory(d) {
     lastHistoryT = now;
     const face = !!d.patient_detected;
     hrHistory.push({
-        t: now, hr: d.hr, opt: face ? d.optical_hr : null, ok: !!d.optical_hr_ok, aco: d.acoustic_hr,
+        t: now, hr: d.hr_card ? d.hr_card.value : d.hr,
+        flag: d.hr_card && d.hr_card.level === "flag" ? d.hr_card.label : null, opt: face ? d.optical_hr : null, ok: !!d.optical_hr_ok, aco: d.acoustic_hr,
         snr: face ? d.cardiac_snr : null, gate: d.snr_gate_db, cons: face && d.optical_hr != null ? d.optical_consensus : null,
         pos: face ? d.optical_hr_pos : null, green: face ? d.optical_hr_green : null,
         trk: face ? d.tracked_hr : null, trkc: face ? d.tracked_conf : null,
@@ -211,12 +216,14 @@ function renderHistory() {
     try {
         const hi = (h) => h.trk != null && h.trkc >= 0.8;
         Plotly.update("hr-trend-plot", {
-            x: [x, x, x, x, x, x],
+            x: [x, x, x, x, x, x, x],
             y: [pick(h => h.hr), pick(h => h.ok ? h.opt : null), pick(h => h.ok ? null : h.opt), pick(h => h.aco),
-                pick(h => hi(h) ? h.trk : null), pick(h => h.trk != null && !hi(h) ? h.trk : null)],
-            text: [[], [], hrHistory.map(h => h.why), [], hrHistory.map(h => h.trkc), hrHistory.map(h => h.trkc)],
+                pick(h => hi(h) ? h.trk : null), pick(h => h.trk != null && !hi(h) ? h.trk : null),
+                pick(h => h.flag && h.hr != null ? h.hr : null)],
+            text: [[], [], hrHistory.map(h => h.why), [], hrHistory.map(h => h.trkc), hrHistory.map(h => h.trkc), hrHistory.map(h => h.flag || "")],
             hovertemplate: [null, "%{y:.1f} BPM accepted<extra></extra>", "%{y:.1f} BPM: %{text}<extra></extra>", null,
-                "tracked %{y:.1f} BPM, confidence %{text:.0%}<extra></extra>", "tracked %{y:.1f} BPM, confidence %{text:.0%}<extra></extra>"]
+                "tracked %{y:.1f} BPM, confidence %{text:.0%}<extra></extra>", "tracked %{y:.1f} BPM, confidence %{text:.0%}<extra></extra>",
+                "%{text}: card held at %{y:.0f} BPM<extra></extra>"]
         });
         Plotly.update("quality-plot", {
             x: [x, x, x],
@@ -441,12 +448,9 @@ function handleRealVitalsUpdate(data) {
             statusEl.innerText = "NO PATIENT DETECTED (SEARCHING...)";
             statusEl.className = "acquisition-alert alert-danger";
         }
-        ["val-hr", "val-rr", "val-hrv", "val-quality", "val-source", "val-spo2"].forEach(id => setText(id, "--"));
-        setText("ts-hr", "TS: --:--:--");
-        setText("ts-rr", "TS: --:--:--");
-        setText("ts-hrv", "TS: --:--:--");
-        setText("ts-quality", "TS: --:--:--");
-        setText("ts-source", "OPT -- | PCG --");
+        renderConfidenceCards(data);
+        renderSecondaryCards(data);
+        renderInsights(data);
         return;
     }
 
@@ -469,20 +473,18 @@ function handleRealVitalsUpdate(data) {
     }
 
     renderConfidenceCards(data);
-    renderSecondaryCards(data, now);
-
-    const qCard = document.getElementById("card-quality");
-    if (qCard && data.quality != null) {
-        qCard.className = "vital-card " + (data.quality >= 50 ? "border-green" : data.quality >= 25 ? "border-amber" : "border-terracotta");
-    }
+    renderSecondaryCards(data);
+    renderInsights(data);
 
     handleAgreementSample(data);
 
     if (data.display_updated && data.display_updated !== lastLoggedUpdate) {
         lastLoggedUpdate = data.display_updated;
-        signalLogs.push([new Date(data.display_updated * 1000).toISOString(), fmt(data.hr, 1), fmt(data.rr, 1),
+        const hc = data.hr_card || {}, rc = data.rr_card || {};
+        signalLogs.push([new Date(data.display_updated * 1000).toISOString(), fmt(hc.value, 1), hc.state || "",
+        fmt(rc.value, 1), rc.state || "", fmt(data.hr, 1), fmt(data.rr, 1),
         fmt(data.hrv, 1), data.fusion_source || "", fmt(data.optical_hr, 1), fmt(data.acoustic_hr, 1),
-        fmt(data.quality, 1), data.video_source || ""]);
+        fmt(data.quality, 1), data.video_source || "", demoOn(data) ? 1 : 0]);   // measured values only; demo values are never logged
         if (signalLogs.length > 3000) signalLogs.shift();
         if (sessionActive) {
             sessionRecordedData.push({
@@ -497,21 +499,6 @@ function handleRealVitalsUpdate(data) {
     }
 }
 
-// Heart-rate and breathing cards: the accepted value when every check passes; otherwise the
-// current estimate, marked "~" in amber with the reason it is not (yet) accepted.
-function setCard(valId, tsId, value, digits, low, note) {
-    const el = document.getElementById(valId);
-    if (el) {
-        el.textContent = value == null ? "--" : (low ? "~" : "") + Number(value).toFixed(digits);
-        el.classList.toggle("low-conf", !!low && value != null);
-    }
-    const ts = document.getElementById(tsId);
-    if (ts) {
-        ts.textContent = note;
-        ts.classList.toggle("low-conf", !!low);
-    }
-}
-
 function hrRejectionReason(d) {
     if ((d.segment_seconds || 0) < 10) return `BUFFERING ${fmt(d.segment_seconds, 0)}/10 s`;
     if (d.optical_hr_ok) return "CONFIRMING (3 AGREEING READINGS)";
@@ -522,32 +509,276 @@ function hrRejectionReason(d) {
     return "LOW CONFIDENCE: " + (why.join(", ") || "QUALITY CHECK");
 }
 
+// ================= Readout cards: one large value + one status badge =================
+// Heart rate and breathing come from the backend stabilizer (display_stabilizer.py): the value is
+// held steady, a reading that jumps further than a heart rate can change is held and flagged, and
+// the badge says which state the card is in. Details are in the card's tooltip, not in small text.
+const BADGE_DWELL_MS = 4000;
+const badgeShown = {};
+
+// Show a value and its badge on a card. level: ok | warn | flag | idle. The value and the badge
+// change together: while a badge is held for its minimum dwell, the value shown with it is held too.
+function setReadout(key, value, digits, label, level, detail, valueClass) {
+    const text = value == null ? "--" : (typeof value === "number" ? value.toFixed(digits) : value);
+    const shown = setBadge(key, { label, level, detail, text, valueClass: value == null ? null : valueClass });
+    const v = document.getElementById("val-" + key);
+    if (v) {
+        v.textContent = shown.text;
+        v.classList.remove("value-warn", "value-held", "value-sim");
+        if (shown.valueClass) v.classList.add(shown.valueClass);
+    }
+}
+
+// Badge with a minimum dwell, so it cannot flicker between labels on every update; a flag is
+// always shown at once. Returns what is shown (label, level, detail, value text).
+function setBadge(key, next) {
+    const now = Date.now();
+    const cur = badgeShown[key];
+    let shown = next;
+    if (cur && cur.label !== next.label && next.level !== "flag" && cur.level !== "flag" && now - cur.t < BADGE_DWELL_MS) {
+        shown = cur;                                   // keep the previous label and its value together
+    } else {
+        badgeShown[key] = Object.assign({}, next, { t: cur && cur.label === next.label ? cur.t : now });
+    }
+    const b = document.getElementById("ts-" + key);
+    if (b) {
+        b.textContent = shown.label;
+        b.className = "card-badge badge-" + shown.level;
+    }
+    const card = document.getElementById("card-" + key);
+    if (card) {
+        card.title = shown.detail || "";
+        card.classList.toggle("card-flagged", shown.level === "flag");
+    }
+    return shown;
+}
+
+function renderStabilizedCard(key, c, digits) {
+    if (!c) { setReadout(key, null, 0, "NO SIGNAL", "idle", "Waiting for the backend."); return; }
+    const cls = c.level === "warn" ? "value-warn" : (c.state === "HOLDING" || c.state === "RAPID_CHANGE" || c.state === "UNSTABLE" || c.state === "DISAGREE") ? "value-held" : null;
+    let detail = c.detail;
+    if (c.state === "LOW_CONFIDENCE" && key === "hr" && lastVitalsData) detail += " " + hrRejectionReason(lastVitalsData).replace("LOW CONFIDENCE: ", "Reason: ") + ".";
+    setReadout(key, c.value, digits, c.label, c.level, detail, cls);
+}
+
+const demoOn = (d) => !!(d && d.demo && d.demo.enabled);
+// Camera HRV is shown only when it passed its checks and its beat rate matches the heart-rate card.
+const camHrvOk = (d) => !!(d.camera_hrv && d.camera_hrv.ok && d.hr_card && d.hr_card.value != null &&
+    Math.abs(d.camera_hrv.median_hr - d.hr_card.value) <= 8);
+
+// Labelled demo mode switch (backend /api/demo); the banner follows the backend state on every update.
+function renderDemoState(on) {
+    const btn = document.getElementById("demo-toggle");
+    if (btn) { btn.textContent = on ? "DEMO: ON" : "DEMO: OFF"; btn.classList.toggle("on", on); }
+    const banner = document.getElementById("demo-banner");
+    if (banner) banner.hidden = !on;
+}
+function initDemoToggle() {
+    const btn = document.getElementById("demo-toggle");
+    if (!btn) return;
+    fetch(API + "/api/demo").then(r => r.json()).then(j => renderDemoState(!!j.enabled)).catch(() => { });
+    btn.addEventListener("click", async () => {
+        const want = !btn.classList.contains("on");
+        try {
+            const r = await fetch(API + "/api/demo", { method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ enabled: want }) });
+            renderDemoState(!!(await r.json()).enabled);
+        } catch (e) { }
+    });
+}
+
 function renderConfidenceCards(d) {
-    const held = (age) => age != null && age > 3 ? ` | HELD ${fmt(age, 0)} s` : "";
-    // Heart rate
-    if (d.hr != null) {
-        const src = d.fusion_source ? d.fusion_source.toUpperCase() : "";
-        setCard("val-hr", "ts-hr", d.hr, 1, false, `ACCEPTED ${src}${d.cardiac_snr != null ? " | SNR " + fmt(d.cardiac_snr, 1) + " dB" : ""}${held(d.hr_age_s)}`);
-    } else if (d.patient_detected && d.tracked_hr != null && d.tracked_conf >= (d.tracked_high_conf || 0.8)) {
-        setCard("val-hr", "ts-hr", d.tracked_hr, 1, false, `TRACKED, HIGH CONFIDENCE ${fmt(100 * d.tracked_conf, 0)}% (${d.ensemble_spectra} SPECTRA)`);
-    } else if (d.patient_detected && d.tracked_hr != null) {
-        setCard("val-hr", "ts-hr", d.tracked_hr, 0, true, `TRACKED, LOW CONFIDENCE ${fmt(100 * d.tracked_conf, 0)}% | ` + hrRejectionReason(d).replace("LOW CONFIDENCE: ", ""));
-    } else if (d.patient_detected && d.optical_hr != null) {
-        setCard("val-hr", "ts-hr", d.optical_hr, 0, true, "CAMERA " + hrRejectionReason(d));
-    } else if (d.acoustic_hr_estimate != null) {
-        setCard("val-hr", "ts-hr", d.acoustic_hr_estimate, 0, true, "MICROPHONE ONLY: LOW CONFIDENCE (IRREGULAR BEATS)");
+    renderDemoState(demoOn(d));
+    renderStabilizedCard("hr", d.hr_card, 0);
+    renderStabilizedCard("rr", d.rr_card, 0);
+}
+
+function renderSecondaryCards(d) {
+    const face = !!d.patient_detected;
+    const micOn = !!d.acoustic_connected;
+    // HRV: heart-sound beat timing (PCG) when available; camera beat timing is exploratory only.
+    if (d.hrv != null) {
+        setReadout("hrv", d.hrv, 0, "FROM HEART SOUNDS", "ok", "RMSSD over at least 20 clean heart-sound intervals (microphone on the chest).");
+    } else if (face && camHrvOk(d)) {
+        // camera beat timing (vitals_dsp.camera_hrv): only with a strong pulse, >= 20 fps and clean intervals
+        const h = d.camera_hrv;
+        setReadout("hrv", h.rmssd, 0, "FROM CAMERA", "warn",
+            `RMSSD from ${h.n_ibi} camera beat intervals (${Math.round(100 * h.clean)}% clean, ${h.fps} fps, SDNN ${fmt(h.sdnn, 0)} ms). ` +
+            "Webcam beat timing is noisier than ECG: about 11 ms error at this signal quality in our tests.", "value-warn");
+    } else if (face && d.camera_hrv && d.camera_hrv.reason && !demoOn(d)) {
+        const r = d.camera_hrv.reason;
+        setReadout("hrv", null, 0, r.includes("weak") ? "SIGNAL TOO WEAK" : r.includes("fps") ? "NEEDS 20+ FPS" : "MEASURING", "idle",
+            "Camera HRV: " + r + ". Better light on the face and holding still raise the pulse SNR.");
+    } else if (demoOn(d)) {
+        setReadout("hrv", d.demo.hrv, 0, "SIMULATED", "sim",
+            "Demo mode: a typical resting RMSSD (30-55 ms), not a measurement. A real value needs the chest microphone to find a heart rhythm.", "value-sim");
     } else {
-        setCard("val-hr", "ts-hr", null, 0, false, d.patient_detected ? "BUFFERING" : "NO FACE / NO HEART SOUNDS");
+        setReadout("hrv", null, 0, micOn ? "NEEDS MIC ON CHEST" : "MIC OFFLINE", "idle",
+            micOn ? "Needs 20 clean heart-sound beats: press the ESP32 microphone on the chest." : "The ESP32 node microphone is not streaming.");
     }
-    // Breathing rate
-    if (d.rr != null) {
-        setCard("val-rr", "ts-rr", d.rr, 1, false, "ACCEPTED" + held(d.rr_age_s));
-    } else if (d.patient_detected && d.optical_rr_estimate != null) {
-        setCard("val-rr", "ts-rr", d.optical_rr_estimate, 0, true, `LOW CONFIDENCE: WEAK BREATHING PEAK (Q ${fmt(100 * (d.rr_quality || 0), 0)}%)`);
+    // Signal quality: the number is the camera spectral concentration (or the fused quality when
+    // accepted); the badge compares the pulse SNR with the acceptance gate.
+    // camera only (the microphone is not part of the heart-rate output)
+    const q = face && d.optical_quality != null && d.cardiac_snr != null ? 100 * d.optical_quality : null;
+    if (q == null) {
+        setReadout("quality", null, 0, face ? "MEASURING" : "NO SIGNAL", "idle", face ? "Needs 10 s of face video." : "No face in view.");
     } else {
-        setCard("val-rr", "ts-rr", null, 0, false, !d.patient_detected ? "NO FACE"
-            : (d.segment_seconds || 0) < 15 ? `NEEDS 15 s (${fmt(d.segment_seconds, 0)} s)` : "NO BREATHING PEAK");
+        const snr = d.cardiac_snr, gate = d.snr_gate_db != null ? d.snr_gate_db : -2;
+        const [lab, lev] = d.optical_hr_ok ? ["GOOD", "ok"] : snr != null && snr >= gate - 3 ? ["FAIR", "warn"] : ["POOR", "flag"];
+        setReadout("quality", q, 0, lab, lev, `Pulse SNR ${fmt(snr, 1)} dB (acceptance needs >= ${fmt(gate, 0)} dB and all three methods agreeing).` +
+            (lev === "flag" ? " Hold still, face the light, avoid backlight." : ""));
     }
+    // HR source: which methods the shown heart rate averages (same snapshot as the comparison table).
+    const c = d.hr_consensus;
+    const hasHr = d.hr_card && d.hr_card.value != null;
+    if (!hasHr) {
+        setReadout("source", null, 0, "NONE", "idle", "No heart rate shown.");
+    } else if (c && c.tier) {
+        const fams = new Set((d.method_rows || []).filter(r => r.in_average).map(r =>
+            r.family.startsWith("Deep") ? "DEEP" : r.family === "Acoustic" ? "MIC" : "CLASSIC"));
+        setReadout("source", `${c.agree} METHODS`, 0, c.excluded.length ? `${c.excluded.length} LEFT OUT` : "ALL INCLUDED",
+            c.excluded.length ? "warn" : "ok",
+            `Average of ${c.used.join(", ")} (${[...fams].join(" + ")})` + (c.excluded.length ? `; left out as outliers: ${c.excluded.join(", ")}.` : "."));
+    } else {
+        const tier = d.hr_card.tier;
+        setReadout("source", tier === "mic_estimate" ? "MICROPHONE" : "CAMERA", 0, "SINGLE METHOD", "warn",
+            "Fewer than 3 methods available, so the value comes from one method.");
+    }
+}
+
+// ================= Face insights: perfusion map, liveness, breathing pattern, blinks, head =================
+function renderInsights(d) {
+    const ins = d.insights || {};
+    const face = !!d.patient_detected;
+    // Liveness
+    const lv = ins.liveness || {};
+    const lvText = { LIVE: "LIVE", NO_PULSE: "NO PULSE", CHECKING: "CHECKING" }[lv.state] || "--";
+    setReadout("live", face ? lvText : "--", 0, !face ? "NO FACE" : lv.state === "LIVE" ? "VERIFIED"
+        : lv.state === "NO_PULSE" ? "PHOTO OR SCREEN?" : "NEEDS MORE TIME", !face ? "idle" : lv.level || "idle",
+        "A live face pulses and blinks; a photo does neither. " + (lv.detail || "") +
+        " A video of a face on a screen also pulses: this is a photo check, not full anti-spoofing.");
+    // Blood-flow map + perfusion index: made on request from a still 30 s capture
+    const cap = ins.capture || {};
+    renderCapture(cap);
+    const cr = cap.state === "DONE" ? (cap.result || {}) : null;
+    if (cr && cr.pi_median != null) {
+        const share = Math.round(100 * (cr.skin_pulse_frac || 0));
+        setReadout("pi", cr.pi_median, 2, `CAPTURED ${cap.captured_at}`, share >= 30 ? "ok" : "warn",
+            `Median peak-to-peak green pulse / skin brightness over the skin that pulses at ${fmt(cr.hr, 0)} BPM ` +
+            `(${share}% of skin, ${cr.grid}x${cr.grid} map, ${cr.seconds} s capture at ${cr.fps} fps). A relative measure of ` +
+            "skin blood flow: compare captures over time and between regions, not between people or cameras.");
+    } else {
+        const rec = cap.state === "RECORDING";
+        setReadout("pi", null, 0, rec ? `RECORDING ${Math.ceil(cap.seconds_left || 0)} s` : cap.state === "FAILED" ? "CAPTURE FAILED" : "PRESS CAPTURE",
+            rec ? "warn" : cap.state === "FAILED" ? "flag" : "idle", cap.message || "Press capture and hold still for 30 s.");
+    }
+    const regions = document.getElementById("perfusion-regions");
+    if (regions) {
+        const r = (cr && cr.regions) || {};
+        regions.innerHTML = ["forehead", "left cheek", "right cheek", "nose"].map(k =>
+            `<span class="rname">${k}</span><span class="rval">${r[k] && r[k].pi != null ? r[k].pi.toFixed(2) + " %" : "--"}</span>`).join("");
+    }
+    // Breathing pattern
+    const b = ins.breathing || {};
+    const bpatText = { REGULAR: "REGULAR", IRREGULAR: "IRREGULAR", PAUSE: "PAUSE" }[b.pattern];
+    const srcName = { riiv: "skin brightness", riav: "pulse height", rifv: "pulse rate", motion: "head motion" }[b.source] || "";
+    if (face && bpatText) {
+        setReadout("bpat", bpatText, 0, b.pattern === "PAUSE" ? `PAUSE ${fmt(b.pause_s, 0)} s` : b.pattern === "IRREGULAR" ? "VARIES BREATH TO BREATH" : "STEADY RHYTHM",
+            b.pattern === "REGULAR" ? "ok" : b.pattern === "IRREGULAR" ? "warn" : "flag",
+            `${b.breaths} breaths in the last 30 s from ${srcName}; breath-to-breath variation ${b.cv != null ? Math.round(100 * b.cv) + "%" : "--"} ` +
+            "(irregular above 30%); a pause is >= 8 s without breathing movement. A flag, not a diagnosis.");
+    } else {
+        const bh = (b.reason || "").match(/hold still \((\d+) s more\)/);
+        setReadout("bpat", "--", 0, !face ? "NO FACE" : bh ? `HOLD STILL ${bh[1]} s` : "NO CLEAR SIGNAL", bh ? "warn" : "idle",
+            bh ? "Breathing is measured only after 20 s without head movement; any movement swamps the breathing signals."
+               : "Needs a clear breathing signal (see the breathing-rate card): sit still facing the camera.");
+    }
+    // Blink rate
+    const bl = ins.blink || {};
+    if (face && bl.ok) {
+        setReadout("blink", bl.rate, 0, `${bl.blinks} BLINKS IN ${bl.seconds} s`, "ok",
+            "Eye-aspect-ratio dips from face landmarks (MediaPipe). Typical at rest 15-20/min; lower while reading or " +
+            "looking at a screen, higher while talking or tired.");
+    } else {
+        const r = bl.reason || "";
+        setReadout("blink", null, 0, !face ? "NO FACE" : r.includes("fps") ? "NEEDS 15+ FPS CAMERA" : r.includes("unavailable") ? "LANDMARKS UNAVAILABLE" : "COUNTING",
+            "idle", r.includes("fps") ? "Blinks last 100-400 ms; the ESP32 camera's 5 fps video misses many, so no rate is shown (blinks still count for liveness)." : (r || "Waiting for face video."));
+    }
+    // Head steadiness
+    const h = ins.head || {};
+    const hText = { STEADY: "STEADY", SLIGHT_MOVEMENT: "SLIGHT MOVEMENT", MOVING: "MOVING" }[h.state];
+    const pose = h.pose ? ` Head turned ${Math.abs(h.pose.yaw).toFixed(0)}° ${h.pose.yaw >= 0 ? "right" : "left"}, tilted ${Math.abs(h.pose.pitch).toFixed(0)}° ${h.pose.pitch >= 0 ? "down" : "up"}.` : "";
+    if (face && hText) {
+        setReadout("head", hText, 0, `MOVEMENT ${fmt(h.rms, 1)}% OF FACE`, h.state === "STEADY" ? "ok" : h.state === "MOVING" ? "flag" : "warn",
+            "Face position spread over the last 10 s (face tracker)." + pose + (h.state !== "STEADY" ? " Readings taken while moving are less reliable." : ""));
+    } else {
+        setReadout("head", "--", 0, face ? "MEASURING" : "NO FACE", "idle", "Needs a few seconds of face video.");
+    }
+}
+
+let shownCaptureAt = null;
+function renderCapture(cap) {
+    const btn = document.getElementById("capture-map-btn"), st = document.getElementById("capture-status");
+    if (!btn || !st) return;
+    const rec = cap.state === "RECORDING";
+    btn.textContent = rec ? `RECORDING... ${Math.ceil(cap.seconds_left || 0)} s LEFT` : "CAPTURE BLOOD-FLOW MAP (30 s)";
+    btn.classList.toggle("recording", rec);
+    st.textContent = cap.message || "";
+    st.classList.toggle("flag", cap.state === "FAILED" || (rec && /moved|lost/i.test(cap.message || "")));
+    if (cap.state === "DONE" && cap.captured_at !== shownCaptureAt) {
+        shownCaptureAt = cap.captured_at;
+        loadCapturedMap();
+    }
+}
+
+async function loadCapturedMap() {
+    const img = document.getElementById("perfusion-img"), empty = document.getElementById("perfusion-empty");
+    try {
+        const res = await fetch(API + "/api/perfusion_map.jpg?t=" + Date.now());
+        if (res.status !== 200) return;
+        const url = URL.createObjectURL(await res.blob());
+        if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+        img.src = url; img.dataset.url = url; img.hidden = false; empty.hidden = true;
+    } catch (e) { }
+}
+
+function initPerfusionMap() {
+    const btn = document.getElementById("capture-map-btn");
+    if (btn) btn.addEventListener("click", async () => {
+        try { renderCapture(await (await fetch(API + "/api/perfusion/capture", { method: "POST" })).json()); } catch (e) { }
+    });
+    loadCapturedMap();                                       // a capture made before this page was opened
+    initInsightsLive();
+}
+
+// Real-time eye openness (blinks marked) and breathing movement (breaths marked), 4 updates per second
+let insightsLiveBusy = false;
+function initInsightsLive() {
+    const earLayout = Object.assign(layoutDefaults("Eye openness, live (blinks marked)", "Eye aspect ratio", "Time (s)"),
+        { showlegend: false, margin: { l: 45, r: 10, t: 28, b: 32 } });
+    earLayout.xaxis.range = [-20, 0];
+    Plotly.newPlot("ear-plot", [
+        { x: [], y: [], type: "scatter", mode: "lines", line: { color: "#2E86C1", width: 1.3 } },
+        { x: [], y: [], type: "scatter", mode: "markers", marker: { color: "#B85430", size: 8, symbol: "triangle-down" },
+          hovertemplate: "blink %{x:.1f} s<extra></extra>" }], earLayout, PLOT_CONFIG);
+    const brLayout = Object.assign(layoutDefaults("Breathing movement, live (head, breaths marked)", "% of face height", "Time (s)"),
+        { showlegend: false, margin: { l: 45, r: 10, t: 28, b: 32 } });
+    brLayout.xaxis.range = [-30, 0];
+    Plotly.newPlot("breath-plot", [
+        { x: [], y: [], type: "scatter", mode: "lines", line: { color: "#B85430", width: 1.3 } },
+        { x: [], y: [], type: "scatter", mode: "markers", marker: { color: "#0F6A4A", size: 7 },
+          hovertemplate: "breath %{x:.1f} s<extra></extra>" }], brLayout, PLOT_CONFIG);
+    setInterval(async () => {
+        const dash = document.getElementById("tab-dashboard");
+        if (insightsLiveBusy || (dash && !dash.classList.contains("active"))) return;
+        insightsLiveBusy = true;
+        try {
+            const L = await (await fetch(API + "/api/insights_live")).json();
+            const at = (ts, xs, ys) => ts.map(b => { let k = 0; while (k < xs.length - 1 && xs[k] < b) k++; return ys[k]; });
+            Plotly.update("ear-plot", { x: [L.ear_t, L.blinks], y: [L.ear, at(L.blinks, L.ear_t, L.ear)] });
+            Plotly.update("breath-plot", { x: [L.breath_t, L.breaths], y: [L.breath, at(L.breaths, L.breath_t, L.breath)] });
+        } catch (e) { } finally { insightsLiveBusy = false; }
+    }, 250);
 }
 
 // ================= Live method comparison =================
@@ -576,10 +807,14 @@ function renderMethods(m) {
     body.innerHTML = m.methods.map(r => {
         const est = r.hr == null && r.estimate != null;
         const off = r.hr == null && !est;
-        const cls = (r.name === "SonicVitals" ? "ours " : "") + (off ? "off" : "");
+        const notUsed = r.for_hr === false;
+        const outlier = !notUsed && r.hr != null && !r.in_average && m.consensus_detail && m.consensus_detail.tier;
+        const cls = (r.name === "SonicVitals" ? "ours " : "") + (off ? "off " : "") + (outlier ? "outlier" : "");
         const dot = `<span style="color:${FAMILY_COLOR[r.family] || "#666"}">●</span>`;
         const val = r.hr != null ? Number(r.hr).toFixed(1) : est ? `<span class="low-conf-inline">~${Number(r.estimate).toFixed(1)}</span>` : "--";
-        return `<tr class="${cls}"><td>${dot} ${r.name}</td><td>${r.family}</td><td class="hr-cell">${val}</td><td>${r.note || ""}</td></tr>`;
+        const tag = r.in_average ? '<span class="avg-tag in">IN AVERAGE</span>' : outlier ? '<span class="avg-tag out">OUTLIER, LEFT OUT</span>'
+            : notUsed && r.hr != null ? '<span class="avg-tag">NOT USED FOR HR</span>' : "";
+        return `<tr class="${cls}"><td>${dot} ${r.name}</td><td>${r.family}</td><td class="hr-cell">${val}</td><td>${tag}${r.note || ""}</td></tr>`;
     }).join("");
     const pts = m.methods.filter(r => r.hr != null).reverse();
     try {
@@ -591,49 +826,15 @@ function renderMethods(m) {
             xaxis: { range: [40, 150], gridcolor: "#D3D3CB", tickfont: { size: 8, family: "monospace" }, title: { text: "Heart rate (BPM)", font: { size: 8 } } },
             yaxis: { automargin: true, tickfont: { size: 9 } },
             margin: { l: 120, r: 15, t: 30, b: 36 },
-            shapes: m.median != null ? [{ type: "line", x0: m.median, x1: m.median, yref: "paper", y0: 0, y1: 1, line: { color: "#9A9A90", dash: "dot", width: 1 } }] : []
+            shapes: m.card && m.card.value != null ? [{ type: "line", x0: m.card.value, x1: m.card.value, yref: "paper", y0: 0, y1: 1, line: { color: "#0F6A4A", dash: "dot", width: 2 } }] : []
         }), PLOT_CONFIG);
     } catch (e) { }
-    const agree = m.spread == null ? "--" : m.spread <= 6 ? `AGREE (spread ${m.spread} BPM)` : `DISAGREE (spread ${m.spread} BPM)`;
-    setText("methods-meta", `MEDIAN ${m.median == null ? "--" : m.median} BPM | ${agree}`);
+    const c = m.consensus_detail, card = m.card;
+    const shown = card && card.value != null ? `${Math.round(card.value)} BPM` : "--";
+    setText("methods-meta", !c ? "NO METHOD HAS A VALUE YET"
+        : c.tier ? `HEART-RATE CARD: ${shown} = AVERAGE OF ${c.agree} OF ${c.n} AGREEING METHODS` + (c.excluded.length ? ` (${c.excluded.join(", ")} LEFT OUT)` : "")
+        : `HEART-RATE CARD: ${shown} | METHODS DISAGREE (NO 3 WITHIN 8 BPM)`);
     setText("methods-foot", `Deep models: ${m.deep_status}` + (m.bg_rejected && m.bg_rejected.length ? ` | lighting peaks rejected (seen on the wall): ${m.bg_rejected.join(", ")} BPM` : ""));
-}
-
-// HRV, signal quality, HR source and SpO2: a value when one exists, otherwise the reason why not.
-function renderSecondaryCards(d, now) {
-    const micOn = !!d.acoustic_connected;
-    // HRV comes from heart-sound beat timing (PCG); the camera signal is too weak to time single beats.
-    if (d.hrv != null) {
-        setCard("val-hrv", "ts-hrv", d.hrv, 0, false, "HEART SOUNDS (PCG) | TS: " + now);
-    } else if (d.patient_detected && d.camera_rmssd != null) {
-        setCard("val-hrv", "ts-hrv", d.camera_rmssd, 0, true, "CAMERA PULSE PEAKS, EXPLORATORY (15 Hz TIMING)");
-    } else {
-        setCard("val-hrv", "ts-hrv", null, 0, false, micOn ? "NEEDS 20 HEART-SOUND BEATS (MIC ON CHEST)"
-            : "NEEDS HIGH-CONFIDENCE CAMERA TRACK OR ESP32 MIC ON CHEST");
-    }
-    // Signal quality: fused quality when an HR is accepted, otherwise the camera's spectral concentration.
-    if (d.quality != null) {
-        setCard("val-quality", "ts-quality", d.quality, 0, false, "MAX(Q_OPT, RHO_PCG)");
-    } else if (d.patient_detected && d.optical_quality != null && d.optical_hr != null) {
-        setCard("val-quality", "ts-quality", 100 * d.optical_quality, 0, true,
-            `CAMERA ONLY, NOT ACCEPTED | SNR ${fmt(d.cardiac_snr, 1)} dB (GATE ${fmt(d.snr_gate_db, 0)})`);
-    } else {
-        setCard("val-quality", "ts-quality", null, 0, false, "NO SIGNAL YET");
-    }
-    // HR source: which sensor the accepted HR came from.
-    const src = d.fusion_source ? d.fusion_source.toUpperCase() : null;
-    setText("val-source", src ? (d.fusion_disagreement ? src + " (CONFLICT)" : src)
-        : d.tracked_hr != null ? "CAMERA (TRACKED)" : "NONE");
-    setText("ts-source", src ? `OPT ${fmt(d.optical_hr, 1)} | PCG ${fmt(d.acoustic_hr, 1)}`
-        : `NO ACCEPTED HR | CAMERA TRACK ${fmt(d.tracked_hr, 0)} (${fmt(100 * (d.tracked_conf || 0), 0)}%) | MIC ${micOn ? "~" + fmt(d.acoustic_hr_estimate, 0) : "OFFLINE"}`);
-    // SpO2 needs a per-camera calibration against a finger oximeter; without it no number is shown.
-    if (d.spo2 != null) {
-        setText("val-spo2", fmt(d.spo2, 1));
-        setText("ts-spo2", "CALIBRATED FIT (EXPLORATORY)");
-    } else {
-        setText("val-spo2", "--");
-        setText("ts-spo2", "NOT CALIBRATED: NEEDS FINGER-OXIMETER CALIBRATION" + (d.spo2_ratio != null ? ` | R=${fmt(d.spo2_ratio, 3)}` : ""));
-    }
 }
 
 let dashRenderTick = 0;
@@ -719,13 +920,40 @@ function initAudioStream() {
 
 function renderAudio(a) {
     const dot = document.getElementById("mic-status-dot");
+    if (a.simulated) {
+        setText("mic-status-text", `SIMULATED NORMAL HEART SOUNDS AT ${fmt(a.simulated_hr, 0)} BPM | REAL MIC: ${a.connected ? "NO RHYTHM (rho " + fmt(a.rho, 2) + " < 0.4)" : "OFFLINE"}`);
+        if (dot) dot.className = "mic-dot mic-dot-sim";
+        drawAudio(a, true);
+        return;
+    }
     if (!a.connected) {
+        drawAudio(null, false);
         setText("mic-status-text", "NO AUDIO STREAM FROM NODE");
         if (dot) dot.className = "mic-dot mic-dot-off";
         return;
     }
     if (dot) dot.className = "mic-dot mic-dot-on";
     setText("mic-status-text", `INMP441 | PCG ${fmt(a.hr, 1)} BPM | rho ${fmt(a.rho, 2)} | lost ${a.blocks_lost}`);
+    drawAudio(a, false);
+}
+
+// Draw the microphone trace and spectrogram; a simulated (demo) pattern is drawn in purple with a
+// SIMULATED watermark on both plots.
+let audioDrawKey = null;
+const SIM_NOTE = (hr) => ({ text: `SIMULATED: normal heart-sound pattern at ${Math.round(hr || 72)} BPM, not your recording`,
+    xref: "paper", yref: "paper", x: 0.5, y: 0.98, showarrow: false, font: { size: 11, color: "#6A3FB5" },
+    bgcolor: "rgba(106,63,181,0.10)", bordercolor: "#6A3FB5", borderwidth: 1, borderpad: 3 });
+function drawAudio(a, simulated) {
+    if (!a) return;
+    const key = simulated ? "sim" + Math.round(a.simulated_hr || 72) : "real";
+    if (key !== audioDrawKey) {                       // restyle only when real/simulated (or its rate) changes
+        audioDrawKey = key;
+        try {
+            Plotly.restyle("audio-plot", { "line.color": simulated ? "#6A3FB5" : "#6B8E23" });
+            Plotly.relayout("audio-plot", { annotations: simulated ? [SIM_NOTE(a.simulated_hr)] : [] });
+            Plotly.relayout("spectrogram-plot", { annotations: simulated ? [SIM_NOTE(a.simulated_hr)] : [] });
+        } catch (err) { }
+    }
     try {
         if (a.wave && a.wave.length) {
             const n = a.wave.length;
@@ -975,7 +1203,7 @@ function exportCSV() {
         alert("No display updates recorded yet.");
         return;
     }
-    const header = "time_iso,hr_display_bpm,rr_display_brpm,rmssd_ms,hr_source,hr_optical_bpm,hr_acoustic_bpm,quality_pct,video_source";
+    const header = "time_iso,hr_card_bpm,hr_card_state,rr_card_brpm,rr_card_state,hr_accepted_bpm,rr_accepted_brpm,rmssd_ms,hr_source,hr_optical_bpm,hr_acoustic_bpm,quality_pct,video_source,demo_mode";
     const csv = [header].concat(signalLogs.map(r => r.join(","))).join("\n");
     const a = document.createElement("a");
     a.href = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);

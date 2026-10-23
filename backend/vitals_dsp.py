@@ -7,7 +7,7 @@ exactly the same code. Section numbers refer to the accompanying paper.
 from __future__ import annotations
 
 import numpy as np
-from scipy.signal import butter, sosfiltfilt, filtfilt, welch, resample_poly, find_peaks, hilbert
+from scipy.signal import butter, sosfiltfilt, filtfilt, welch, periodogram, resample_poly, find_peaks, hilbert
 
 # ---------------------------------------------------------------- constants
 FS_OPT = 15.0                 # uniform analysis rate for the optical channel (Hz)
@@ -30,8 +30,19 @@ BG_REJECT_RATIO = 1.0         # a spectral peak at least this strong (relative) 
 EXCLUDE_HZ = 0.06             # half-width of the frequency zone skipped around a background (lighting) peak
 BG_PEAK_FACTOR = 4.0          # ... and it must stand out on the background (x median background bin power)
 AGREE_BPM = 6.0               # consensus: POS or green must find the CHROM peak within this distance
-MIN_SEG_RR_S = 15.0           # shortest contiguous segment for an RR estimate
-MIN_Q_RR = 0.5                # RR is reported only if this share of 0.05-1 Hz power lies at the peak
+MIN_SEG_RR_S = 20.0           # shortest contiguous segment for an RR estimate (>= 2 cycles at 6 breaths/min)
+MIN_Q_RR = 0.5                # (legacy single-source rule, kept for reference; see estimate_rr)
+RR_BAND = (0.1, 0.6)          # 6-36 breaths/min searched (adults at rest: 12-20); peaks on the band edge are rejected
+RR_DETREND_HZ = 0.07          # drift below this is removed before the peak search (it otherwise pulls the peak low)
+RR_SPREAD_BPM = 4.0           # agreeing sources lie within this of each other (Karlen et al.: SD < 4 breaths/min)
+RR_MIN_AGREE = 2              # an RR is reported when >= 2 independent sources (and >= half of them) agree
+# A source counts only if its peak holds this share of the 0.05-1 Hz power (+-0.05 Hz) of the differenced series.
+# Set just above the 95th percentile that source reached on breathing-free synthetic signals with random-walk
+# drift, 25-30 fps (riiv 0.41, motion 0.37, riav 0.53, rifv 0.55); beat-derived series are smooth, so noise
+# alone concentrates their power more.
+RR_MIN_Q = dict(riiv=0.45, motion=0.42, riav=0.60, rifv=0.60)
+RR_WHITEN = "diff"            # "diff" (first difference) or "median" (running-median whitening): see _resp_peak
+RR_SOLO_Q = 0.70              # riiv or motion alone is accepted only this clear (noise max 0.55), none disagreeing
                               # (synthetic: breathing ~0.9, noise <= 0.36; re-tune on development data)
 NFFT = 4096
 
@@ -385,8 +396,12 @@ def background_peaks(freqs, psd, bg_t, bg_rgb, tu, fs, skin_g=None):
 
 def estimate_optical(t, rgb, method: str = "chrom", fs: float = FS_OPT,
                      spo2_calibration: dict | None = None, prior_hr: float | None = None,
-                     bg_t=None, bg_rgb=None) -> dict:
+                     bg_t=None, bg_rgb=None, motion_t=None, motion_y=None, rr_still_from=None) -> dict:
     """Optical HR / RR / SpO2-ratio estimate from timestamped ROI means.
+
+    motion_t, motion_y: optional vertical head position over time (face tracker), a breathing source
+    rr_still_from: time after the last head movement; breathing uses only the stretch after it (a movement
+                   swamps every breathing signal), and none is estimated until it lasts MIN_SEG_RR_S
 
     t   : frame timestamps in seconds (only frames that passed the face gate)
     rgb : N x 3 array of ROI mean (R, G, B)
@@ -402,10 +417,12 @@ def estimate_optical(t, rgb, method: str = "chrom", fs: float = FS_OPT,
                freqs=np.array([]), psd=np.array([]),
                trend=np.array([]), pulsatile=np.array([]), diff=np.array([]), motion_ratio=None,
                artifact_frac=0.0, hr_pos=None, hr_green=None, hr_chrom=None, consensus=0, still_trimmed_s=0.0,
-               rgb_norm=np.empty((0, 3)), bg_rejected=[], method=method, rr_estimate=None, illum_beta=None)
+               rgb_norm=np.empty((0, 3)), bg_rejected=[], method=method, rr_estimate=None, illum_beta=None,
+               rr_sources={}, rr_agree=0)
     tu, xu = resample_uniform(t, rgb, fs)
     if len(tu) < 8:
         return out
+    tu_full, xu_full = tu, suppress_artifacts(xu)[0]   # breathing needs the whole window (>= 2-3 cycles)
     start = still_tail_start(xu, fs)
     if start and (len(xu) - start) / fs >= MIN_STILL_S:
         tu, xu = tu[start:], xu[start:]          # use only the still stretch after the last movement
@@ -469,20 +486,207 @@ def estimate_optical(t, rgb, method: str = "chrom", fs: float = FS_OPT,
             if spo2_calibration and "A" in spo2_calibration and "B" in spo2_calibration:
                 out["spo2"] = float(spo2_calibration["A"] - spo2_calibration["B"] * ratio)
 
-    green = xu[:, 1]
-    out["resp"] = standardize(bandpass(green - np.mean(green), fs, RESP_BAND, 2))
-    out["rr_quality"] = 0.0
-    if seg_s >= MIN_SEG_RR_S:
-        # Peak search on the un-band-passed green trace so the in-band power share is meaningful.
-        g = standardize(green - np.mean(green))
-        fr, rfreqs, rpsd = welch_peak(g, fs, RESP_BAND, nperseg=len(g))
-        if fr is not None:
-            # Half-width of one nominal resolution bin (1/T) around the peak.
-            q = spectral_concentration(rfreqs, rpsd, fr, band=(0.05, 1.0), half=1.0 / seg_s)
-            out["rr_quality"] = q
-            out["rr"] = 60.0 * fr if q >= MIN_Q_RR else None
-            out["rr_estimate"] = 60.0 * fr                  # shown as low confidence when rr is None
+    if rr_still_from is not None:
+        keep = tu_full >= rr_still_from
+        if tu_full[-1] - rr_still_from < MIN_SEG_RR_S:
+            out["rr_reason"] = f"hold still ({MIN_SEG_RR_S - (tu_full[-1] - rr_still_from):.0f} s more)"
+            out["resp"] = np.array([])
+            return out
+        tu_full, xu_full = tu_full[keep], xu_full[keep]
+    xr, _ = rectify_illumination(tu_full, xu_full, bg_t, bg_rgb, fs)
+    g = np.log(np.maximum(xr[:, 1], 1e-6))
+    out["resp"] = standardize(bandpass(_detrend_resp(g, fs), fs, RR_BAND, 2)) if len(g) > 3 * 9 else np.array([])
+    out.update(estimate_rr(tu_full, xr, fs, hr=out["hr"], motion_t=motion_t, motion_y=motion_y))
     return out
+
+
+# ================================================================ breathing rate
+def _detrend_resp(x, fs):
+    """Remove drift below RR_DETREND_HZ (lighting, posture) and content above 1 Hz."""
+    x = np.asarray(x, float) - np.mean(x)
+    pad = min(len(x) - 1, 3 * 9)
+    x = sosfiltfilt(butter(2, RR_DETREND_HZ / (fs / 2), btype="high", output="sos"), x, padlen=pad)
+    return sosfiltfilt(butter(2, min(1.0, 0.45 * fs) / (fs / 2), btype="low", output="sos"), x, padlen=pad)
+
+
+def _resp_peak(x, fs):
+    """(breathing frequency in Hz, peak quality 0-1) of a respiratory-modulated series, or None.
+
+    Single Hann-windowed periodogram of the detrended series (the window is short: 20-30 s), peak in
+    RR_BAND refined by parabolic interpolation; a peak on the band edge means the strongest rhythm
+    lies outside the band (drift or something faster than breathing) and is rejected."""
+    x = np.asarray(x, float)
+    if len(x) < MIN_SEG_RR_S * fs or not np.all(np.isfinite(x)) or np.std(x) == 0:
+        return None
+    if RR_WHITEN == "diff":
+        # First difference: drift behaves like a random walk (power ~ 1/f^2); differencing whitens it, so it
+        # no longer piles up at the low end of the band, while a breathing rhythm keeps its peak.
+        x = np.diff(_detrend_resp(x, fs)) * fs
+        f, p = periodogram(x, fs, window="hann", nfft=max(NFFT, len(x)))
+    else:
+        # Adaptive whitening: divide by the spectrum's own running median (+-0.15 Hz), which follows whatever
+        # background shape is present (random-walk drift at the low end, flat camera noise above).
+        x = _detrend_resp(x, fs)
+        f, p = periodogram(x, fs, window="hann", nfft=max(NFFT, len(x)))
+        from scipy.ndimage import median_filter
+        w = max(3, int(round(0.30 / (f[1] - f[0]))) | 1)
+        p = p / np.maximum(median_filter(p, size=w, mode="nearest"), 1e-30)
+    band = np.where((f >= RR_BAND[0]) & (f <= RR_BAND[1]))[0]
+    if len(band) < 5:
+        return None
+    k = band[np.argmax(p[band])]
+    edge = max(1, int(round(0.02 / (f[1] - f[0]))))     # within 0.02 Hz of the band edge
+    if k <= band[0] + edge or k >= band[-1] - edge:
+        return None
+    fr = float(f[0] + parabolic_peak(p, k) * (f[1] - f[0]))
+    wide = (f >= 0.05) & (f <= 1.0)
+    q = float(p[wide & (np.abs(f - fr) <= 0.05)].sum() / max(p[wide].sum(), 1e-30))
+    return fr, q
+
+
+def _beat_series(bvp, fs, hr):
+    """(beat times, beat amplitudes) from a band-passed pulse wave, or None."""
+    if hr is None or len(bvp) < MIN_SEG_RR_S * fs:
+        return None
+    period = 60.0 / hr
+    pk, _ = find_peaks(bvp, distance=max(1, int(0.6 * period * fs)))
+    if len(pk) < 12:
+        return None
+    amp = []
+    for i, k in enumerate(pk):
+        lo = pk[i - 1] if i else max(0, k - int(period * fs))
+        amp.append(bvp[k] - np.min(bvp[lo:k + 1]))
+    tk = np.array([parabolic_peak(bvp, k) for k in pk]) / fs
+    return tk, np.array(amp)
+
+
+def estimate_rr(tu, xu, fs, hr=None, motion_t=None, motion_y=None):
+    """Breathing rate from up to four independent camera sources, fused only when they agree.
+
+    riiv   respiratory-induced intensity variation: skin brightness (log green) baseline
+    riav   respiratory-induced amplitude variation: pulse height beat by beat
+    rifv   respiratory-induced frequency variation: inter-beat intervals (respiratory sinus arrhythmia)
+    motion vertical head movement from the face tracker (breathing lifts the head and shoulders)
+
+    Fusion as in Karlen et al. (IEEE TBME 2013, "smart fusion"): the sources within RR_AGREE_BPM of
+    their median are averaged when at least RR_MIN_AGREE of them (and at least half) agree; otherwise
+    no rate is accepted and the median is kept as a low-confidence estimate.
+    """
+    res = dict(rr=None, rr_estimate=None, rr_quality=0.0, rr_sources={}, rr_agree=0)
+    tu = np.asarray(tu, float)
+    if len(tu) < MIN_SEG_RR_S * fs or tu[-1] - tu[0] < MIN_SEG_RR_S:
+        return res
+    riiv_sig = np.log(np.maximum(np.asarray(xu)[:, 1], 1e-6))
+    src = {"riiv": _resp_peak(riiv_sig, fs)}
+    series = {"riiv": (riiv_sig, fs)}
+    if hr is not None:
+        pulse = bandpass(chrom_pulse(xu), fs, (0.7, min(3.0, 0.45 * fs)), 3)
+        beats = _beat_series(pulse, fs, hr)
+        if beats is not None:
+            tk, amp = beats
+            fs_b = 4.0
+            grid = np.arange(tk[0], tk[-1], 1.0 / fs_b)
+            ibi = np.diff(tk)
+            ok = np.abs(ibi - np.median(ibi)) <= 0.3 * np.median(ibi)
+            if len(grid) > 8:
+                series["riav"] = (np.interp(grid, tk, amp), fs_b)
+                src["riav"] = _resp_peak(series["riav"][0], fs_b)
+                if ok.sum() >= 10:
+                    series["rifv"] = (np.interp(grid, tk[1:][ok], ibi[ok]), fs_b)
+                    src["rifv"] = _resp_peak(series["rifv"][0], fs_b)
+    if motion_t is not None and len(motion_t) > 10:
+        mt, my = np.asarray(motion_t, float), np.asarray(motion_y, float)
+        m = (mt >= tu[0]) & (mt <= tu[-1]) & np.isfinite(my)
+        if m.sum() > 10 and mt[m][-1] - mt[m][0] >= MIN_SEG_RR_S:
+            series["motion"] = (np.interp(tu, mt[m], my[m]), fs)
+            src["motion"] = _resp_peak(series["motion"][0], fs)
+    res["rr_sources"] = {k: (None if v is None else dict(bpm=round(60.0 * v[0], 1), q=round(v[1], 2)))
+                         for k, v in src.items()}
+    found = {k: (60.0 * v[0], v[1]) for k, v in src.items() if v is not None}
+    if not found:
+        return res
+    good = {k: bq for k, bq in found.items() if bq[1] >= RR_MIN_Q.get(k, 0.5)}
+    pool = good or found                                    # the estimate falls back to all sources
+    agree = _largest_agreeing(pool)
+    w = np.array([q for _, q in agree.values()])
+    res["rr_estimate"] = float(np.average([b for b, _ in agree.values()], weights=w))
+    res["rr_agree"] = len(agree) if good else 0
+    res["rr_quality"] = float(max(q for _, q in found.values()))
+    if good:                                                # breathing waveform of the clearest agreeing source
+        best = max((k for k in agree if k in good), key=lambda k: good[k][1], default=None)
+        if best is not None:
+            x, fsx = series[best]
+            res["rr_wave"] = bandpass(_detrend_resp(x, fsx), fsx, RR_BAND, 2)
+            res["rr_wave_fs"], res["rr_wave_src"] = fsx, best
+    if good and len(agree) >= RR_MIN_AGREE and len(agree) >= 0.5 * len(good):
+        res["rr"] = res["rr_estimate"]
+    elif len(good) == 1 and next(iter(good)) in ("riiv", "motion") and next(iter(good.values()))[1] >= RR_SOLO_Q:
+        res["rr"] = res["rr_estimate"]                     # one very clear source, none disagreeing
+    return res
+
+
+BREATH_IRREGULAR_CV = 0.3     # coefficient of variation of breath-to-breath intervals above which breathing is irregular
+BREATH_PAUSE_S = 8.0          # breathing movement below BREATH_PAUSE_LEVEL x typical for this long: a pause
+BREATH_PAUSE_LEVEL = 0.3
+
+
+def breathing_pattern(wave, fs, rr=None):
+    """REGULAR / IRREGULAR / PAUSE from a breathing waveform (the clearest agreeing breathing source).
+
+    Breaths are the peaks of the band-passed waveform (at least 1.5 s apart); breathing is irregular when the
+    breath-to-breath intervals vary by more than BREATH_IRREGULAR_CV. A pause (e.g. a breath-hold) is a
+    stretch of >= BREATH_PAUSE_S where the breathing envelope falls below BREATH_PAUSE_LEVEL of its typical
+    (75th percentile) level; the first and last 2 s are ignored (filter edges).
+    """
+    out = dict(pattern="UNKNOWN", breaths=0, cv=None, pause_s=0.0, reason="")
+    if wave is None or len(wave) < MIN_SEG_RR_S * fs:
+        out["reason"] = "no clear breathing signal"
+        return out
+    w = np.asarray(wave, float)
+    env = np.abs(hilbert(w))
+    k = max(1, int(2.0 * fs))
+    env = np.convolve(env, np.ones(k) / k, mode="same")
+    edge = int(2.0 * fs)
+    core = env[edge:len(env) - edge]
+    typical = float(np.percentile(core, 75)) if len(core) else 0.0
+    low = core < BREATH_PAUSE_LEVEL * typical
+    run = best = 0
+    for v in low:
+        run = run + 1 if v else 0
+        best = max(best, run)
+    out["pause_s"] = round(best / fs, 1)
+    pk, _ = find_peaks(w, distance=max(1, int(1.5 * fs)), prominence=0.3 * np.std(w))
+    out["breaths"] = int(len(pk))
+    if len(pk) >= 4:
+        iv = np.diff(pk) / fs
+        out["cv"] = round(float(np.std(iv) / np.mean(iv)), 2)
+    if out["pause_s"] >= BREATH_PAUSE_S:
+        out["pattern"] = "PAUSE"
+    elif out["cv"] is None:
+        out["reason"] = "too few breaths"
+    elif out["cv"] > BREATH_IRREGULAR_CV:
+        out["pattern"] = "IRREGULAR"
+    else:
+        out["pattern"] = "REGULAR"
+    return out
+
+
+def _largest_agreeing(sources):
+    """Largest subset of {name: (bpm, q)} whose rates lie within RR_SPREAD_BPM of each other
+    (ties: higher summed quality)."""
+    from itertools import combinations
+    names = list(sources)
+    for size in range(len(names), 0, -1):
+        best = None
+        for combo in combinations(names, size):
+            b = [sources[k][0] for k in combo]
+            if max(b) - min(b) <= RR_SPREAD_BPM:
+                score = sum(sources[k][1] for k in combo)
+                if best is None or score > best[0]:
+                    best = (score, combo)
+        if best:
+            return {k: sources[k] for k in best[1]}
+    return {}
 
 
 # ================================================================ acoustic
@@ -720,6 +924,76 @@ class HRTracker:
         hr = float(TRACK_GRID_BPM[i])
         conf = float(self.post[np.abs(TRACK_GRID_BPM - hr) <= 3.0].sum())
         return hr, conf
+
+
+HRV_MIN_FPS = 20.0            # beat timing needs >= 20 fps video (literature: >= 30 fps best); the ESP32 node gives 10
+HRV_FS = 30.0                 # uniform rate the pulse is rebuilt at before spline interpolation
+HRV_MIN_IBI = 15              # clean inter-beat intervals needed (about 15 s at rest)
+HRV_MIN_CLEAN = 0.8           # ... and this share of all detected intervals must be clean
+HRV_RMSSD_RANGE = (5.0, 150.0)
+HRV_MIN_SNR_DB = 1.0          # pulse SNR needed: on synthetic 30 fps video the RMSSD error was ~11 ms at +1 dB,
+                              # ~64 ms at -2 dB and unmeasurable below -3.5 dB (noise moves every beat time)
+
+
+def camera_hrv(t, rgb, hr_bpm, snr_db=None):
+    """Heart-rate variability from the camera pulse (exploratory), or a reason why not.
+
+    Following webcam PRV studies (Poh et al., IEEE TBME 2011; native-rate sampling and interpolation):
+    the skin RGB is put on a 30 Hz grid at its own timestamps (not the 15 Hz HR analysis rate), the CHROM
+    pulse (beat timing was cleaner than POS on synthetic pulses) is band-passed 0.7-3.5 Hz (wide: a narrow band around the heart rate smooths out the very
+    beat-to-beat variation HRV measures), interpolated to 240 Hz with a cubic spline, and systolic peaks
+    are found at least 0.6 of a beat apart. Intervals more than 20 % from the median are rejected and
+    RMSSD uses successive differences of adjacent clean intervals only.
+    Returns dict(ok, rmssd, sdnn, n_ibi, clean, median_hr, fps, reason).
+    """
+    out = dict(ok=False, rmssd=None, sdnn=None, n_ibi=0, clean=0.0, median_hr=None, fps=None, reason='')
+    t = np.asarray(t, float)
+    rgb = np.asarray(rgb, float).reshape(-1, 3)
+    if hr_bpm is None or len(t) < 30:
+        out['reason'] = 'no heart rate yet'
+        return out
+    if snr_db is None or not np.isfinite(snr_db) or snr_db < HRV_MIN_SNR_DB:
+        out['reason'] = (f'pulse signal too weak for beat timing (SNR {snr_db:+.1f} dB, needs >= {HRV_MIN_SNR_DB:+.0f} dB)'
+                         if snr_db is not None and np.isfinite(snr_db) else 'no pulse SNR yet')
+        return out
+    fps = (len(t) - 1) / max(t[-1] - t[0], 1e-6)
+    out['fps'] = round(float(fps), 1)
+    if fps < HRV_MIN_FPS:
+        out['reason'] = f'needs >= {HRV_MIN_FPS:.0f} fps video (have {fps:.0f})'
+        return out
+    tu, xu = resample_uniform(t, rgb, HRV_FS)
+    if len(tu) < 15 * HRV_FS:
+        out['reason'] = 'needs 15 s of video'
+        return out
+    xu, _ = suppress_artifacts(xu)
+    pulse = bandpass(chrom_pulse(xu), HRV_FS, (0.7, 3.5), 3)
+    from scipy.interpolate import CubicSpline
+    up = 8
+    tt = np.arange(len(pulse)) / HRV_FS
+    ti = np.arange(0, tt[-1], 1.0 / (HRV_FS * up))
+    y = CubicSpline(tt, pulse)(ti)
+    period = 60.0 / hr_bpm
+    pk, _ = find_peaks(y, distance=max(1, int(0.6 * period * HRV_FS * up)), prominence=0.3 * np.std(y))
+    if len(pk) < HRV_MIN_IBI + 1:
+        out['reason'] = 'too few beats found'
+        return out
+    times = np.array([ti[0] + parabolic_peak(y, k) / (HRV_FS * up) for k in pk])
+    ibi = np.diff(times)
+    med = float(np.median(ibi))
+    good = np.abs(ibi - med) <= 0.2 * med
+    out.update(n_ibi=int(good.sum()), clean=round(float(good.mean()), 2), median_hr=round(60.0 / med, 1))
+    pairs = good[1:] & good[:-1]                     # successive differences of adjacent clean intervals only
+    if good.sum() < HRV_MIN_IBI or good.mean() < HRV_MIN_CLEAN or pairs.sum() < HRV_MIN_IBI - 1:
+        out['reason'] = f'beat timing not clean enough ({good.mean():.0%} clean intervals)'
+        return out
+    rmssd = 1000.0 * float(np.sqrt(np.mean(np.diff(ibi)[pairs] ** 2)))
+    sdnn = 1000.0 * float(np.std(ibi[good]))
+    out.update(rmssd=round(rmssd, 1), sdnn=round(sdnn, 1))
+    if not HRV_RMSSD_RANGE[0] <= rmssd <= HRV_RMSSD_RANGE[1]:
+        out['reason'] = f'RMSSD {rmssd:.0f} ms outside the physiological range'
+        return out
+    out['ok'] = True
+    return out
 
 
 def camera_rmssd(bvp: np.ndarray, fs: float, hr_bpm: float | None, min_beats: int = 10):

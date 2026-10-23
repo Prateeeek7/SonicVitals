@@ -21,7 +21,7 @@ ESTIMATE_FIELDS = ['host_time', 'device_t', 'status', 'source',
                    'hr_acoustic', 'rho_acoustic', 'rmssd_ms',
                    'hr_fused', 'fusion_source', 'w_o', 'w_a', 'disagreement',
                    'spo2_ratio', 'spo2_estimate',
-                   'hr_display', 'rr_display']
+                   'hr_display', 'rr_display', 'hr_card', 'hr_card_state', 'demo_mode']
 
 
 class SessionRecorder:
